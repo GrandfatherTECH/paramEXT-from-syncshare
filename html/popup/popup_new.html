@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>paramEXT</title>
+    <link href="../../css/bootstrap.min.css" rel="stylesheet">
+    <link href="../../css/popup/popup_new.css" rel="stylesheet">
+</head>
+<body>
+    <div class="header">
+        <img src="../../logo.png" alt="Logo" class="logo" id="mainLogo">
+        <h3>paramEXT</h3>
+        <small style="color: #6c757d; font-size: 0.8em;">Powered by SyncShare</small>
+    </div>
+
+    <div class="mode-group">
+        <h5>Режим</h5>
+        <div class="form-check">
+            <input class="form-check-input" type="radio" name="mode" id="modeWand" value="wand" checked>
+            <label class="form-check-label" for="modeWand">
+                Палочка
+            </label>
+        </div>
+        <div class="form-check">
+            <input class="form-check-input" type="radio" name="mode" id="modeAutoInsert" value="autoInsert">
+            <label class="form-check-label" for="modeAutoInsert">
+                Авто-вставка ответов
+            </label>
+        </div>
+        <div class="form-check">
+            <input class="form-check-input" type="radio" name="mode" id="modeAutoSolve" value="autoSolve">
+            <label class="form-check-label" for="modeAutoSolve">
+                Авто-прорешивание
+            </label>
+        </div>
+    </div>
+
+    <div id="autoSolveControls" class="hidden mb-3">
+        <button id="btnStart" class="btn btn-success w-100">Начать</button>
+        <button id="btnStop" class="btn btn-danger w-100 hidden">Остановить</button>
+    </div>
+
+    <div class="settings-group">
+        <h5>Настройки</h5>
+        <div class="mb-2">
+            <label for="wandKey" class="form-label">Клавиша скрытия палочки</label>
+            <input type="text" class="form-control" id="wandKey" placeholder="Например: KeyQ">
+        </div>
+        <div class="mb-2">
+            <label for="nextBtnSelector" class="form-label">Название кнопки "Далее"</label>
+            <input type="text" class="form-control" id="nextBtnSelector" value="Следующая страница">
+        </div>
+        <button id="btnSave" class="btn btn-primary w-100 mt-2">Сохранить</button>
+    </div>
+
+    <script src="../../js/popup_new.js"></script>
+</body>
+</html>
