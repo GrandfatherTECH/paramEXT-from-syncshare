@@ -15,6 +15,7 @@
     const BACKEND_LOG_THROTTLE_MS = 30000;
     const CONTENT_FALLBACK_BLOCK_MS = 90000;
     const DEBUG_SYNC_STORAGE_KEY = 'paramExtOpeneduDebug';
+    const PARTICIPANT_KEY_STORAGE = 'paramExtOpeneduParticipantKey';
 
     const NEGATIVE_MARK_RE = /(choicegroup_incorrect|(^|[^a-zа-яё])(incorrect|wrong|false|неверн|неправильн|ошиб)([^a-zа-яё]|$))/i;
     const POSITIVE_MARK_RE = /(choicegroup_correct|(^|[^a-zа-яё])(correct|right|true|верн|правильн)([^a-zа-яё]|$))/i;
@@ -66,6 +67,7 @@
     let scheduledCycleTimer = 0;
     let contentFallbackBlockedUntil = 0;
     let contentFallbackBlockedReason = '';
+    let participantKeyCache = '';
 
     let iframeQuestionsCache = [];
     let topFrameIframeQuestions = null;
@@ -199,6 +201,33 @@
         return new Promise((resolve) => {
             setTimeout(resolve, ms);
         });
+    }
+
+    function getParticipantKey() {
+        if (participantKeyCache) {
+            return participantKeyCache;
+        }
+
+        try {
+            const existing = String(localStorage.getItem(PARTICIPANT_KEY_STORAGE) || '').trim();
+            if (existing) {
+                participantKeyCache = existing;
+                return participantKeyCache;
+            }
+
+            const generated = 'p_' + hash(
+                location.host + '|' +
+                (navigator.userAgent || '') + '|' +
+                String(Date.now()) + '|' +
+                String(Math.random())
+            );
+            localStorage.setItem(PARTICIPANT_KEY_STORAGE, generated);
+            participantKeyCache = generated;
+            return participantKeyCache;
+        } catch (_) {
+            participantKeyCache = 'p_' + hash(location.host + '|' + String(Date.now()));
+            return participantKeyCache;
+        }
     }
 
     function canUseContentFallback() {
@@ -741,7 +770,8 @@
             path,
             fullUrl,
             title,
-            testKey: hash(location.host + '|' + path)
+            testKey: hash(location.host + '|' + path),
+            participantKey: getParticipantKey()
         };
     }
 
@@ -1567,7 +1597,7 @@
                 const applyFallback = document.createElement('button');
                 applyFallback.type = 'button';
                 applyFallback.className = 'paramext-openedu-inline-action fallback';
-                applyFallback.textContent = isMulti ? 'Вставить вероятные ответы' : 'Вставить вероятный ответ';
+                applyFallback.textContent = isMulti ? 'Вставить популярные ответы' : 'Вставить популярный ответ';
                 applyFallback.disabled = fallbackAnswers.length === 0;
                 applyFallback.addEventListener('click', () => {
                     const payload = isMulti ? fallbackAnswers : [fallbackAnswers[0]];
@@ -1630,7 +1660,7 @@
 
             appendAnswersSection('Проверенные', verifiedAnswers, false);
             if (settings.openedu.showFallbackStats) {
-                appendAnswersSection('Вероятные', fallbackAnswers, true);
+                appendAnswersSection('Выбирали', fallbackAnswers, true);
             }
 
             if (list.children.length === 0) {
@@ -1718,24 +1748,31 @@
             const list = document.createElement('ul');
             list.className = 'paramext-answer-list';
 
-            const picked = pickAnswersForUi(stats);
-            if (picked.answers.length === 0) {
+            const verifiedAnswers = normalizeAnswerStatsList(stats.verifiedAnswers);
+            const selectedAnswers = normalizeAnswerStatsList(stats.fallbackAnswers);
+            const visibleAnswers = selectedAnswers.length > 0 ? selectedAnswers : verifiedAnswers;
+            const verifiedKeySet = new Set(verifiedAnswers.map((item) => item.answerKey + '|' + normalizeText(item.answerText)));
+
+            if (visibleAnswers.length === 0) {
                 const emptyItem = document.createElement('li');
                 emptyItem.className = 'paramext-answer-item';
                 emptyItem.textContent = 'Пока нет подтвержденных ответов.';
                 list.appendChild(emptyItem);
             }
 
-            picked.answers.forEach((answer) => {
+            visibleAnswers.forEach((answer) => {
                 const item = document.createElement('li');
                 item.className = 'paramext-answer-item';
 
                 const text = document.createElement('span');
                 text.className = 'paramext-answer-text';
-                text.textContent = answer.answerText;
+                const answerSignature = answer.answerKey + '|' + normalizeText(answer.answerText);
+                const isVerified = verifiedKeySet.has(answerSignature);
+                text.textContent = isVerified ? (answer.answerText + ' ✓') : answer.answerText;
 
                 const count = document.createElement('span');
-                count.className = 'paramext-answer-count' + (picked.isFallback ? ' fallback' : '');
+                const isDistribution = selectedAnswers.length > 0;
+                count.className = 'paramext-answer-count' + (isDistribution ? ' fallback' : '');
                 count.textContent = String(answer.count || 0);
 
                 item.appendChild(text);
@@ -1745,12 +1782,12 @@
 
             card.appendChild(list);
 
-            const topAnswer = picked.answers.length > 0 ? picked.answers[0] : null;
+            const topAnswer = verifiedAnswers[0] || visibleAnswers[0] || null;
             const controls = document.createElement('div');
             controls.className = 'paramext-question-controls';
             const applyBtn = document.createElement('button');
             applyBtn.className = 'paramext-apply-btn';
-            applyBtn.textContent = picked.isFallback ? 'Применить (резерв)' : 'Применить лучший';
+            applyBtn.textContent = verifiedAnswers.length > 0 ? 'Применить правильный' : 'Применить популярный';
             applyBtn.disabled = !topAnswer;
             applyBtn.addEventListener('click', () => {
                 if (!topAnswer) {
@@ -1908,9 +1945,7 @@
                         setStickOnline(Boolean(iframeOnlineState.online), String(iframeOnlineState.text || 'API недоступен'));
                         renderStick(topFrameIframeStats, topFrameIframeQuestions);
                     } else {
-                        const online = await probeBackendOnline();
-                        setStickOnline(online, online ? 'API доступен' : 'API недоступен');
-                        renderStick(null, []);
+                        setStickOnline(false, 'Ожидание данных из iframe');
                     }
                 }
                 return;
@@ -1969,11 +2004,13 @@
                 error: 'not_changed',
                 data: null
             };
+            let didPushUpdate = false;
 
             if (attemptFingerprint !== lastAttemptPayloadHash) {
                 pushResult = await pushAttemptSnapshot(questions);
                 if (pushResult.ok) {
                     lastAttemptPayloadHash = attemptFingerprint;
+                    didPushUpdate = true;
                     clearSyncBlock();
                 }
             } else {
@@ -1982,10 +2019,13 @@
                 });
             }
 
-            const shouldQuery =
+            const shouldQueryBase =
+                Boolean(force) ||
+                didPushUpdate ||
                 questionSignature !== lastStatsQuerySignature ||
-                (Date.now() - lastStatsQueryAt) >= QUERY_COOLDOWN_MS ||
                 !lastStatsResponse;
+            const shouldRespectCooldown = !didPushUpdate && !Boolean(force);
+            const shouldQuery = shouldQueryBase && (!shouldRespectCooldown || (Date.now() - lastStatsQueryAt) >= QUERY_COOLDOWN_MS);
 
             let statsResult = {
                 ok: true,
@@ -2042,12 +2082,7 @@
                 const pushErr = describeRequestError(pushResult);
                 const statsErr = describeRequestError(statsResult);
                 const errText = [pushErr, statsErr].filter(Boolean).join(' / ');
-                const probeOnline = await probeBackendOnline();
-                if (probeOnline) {
-                    onlineState = { online: true, text: 'API ок, sync: ' + (errText || 'ошибка') };
-                } else {
-                    onlineState = { online: false, text: 'API недоступен: ' + (errText || 'network') };
-                }
+                onlineState = { online: false, text: 'API недоступен: ' + (errText || 'network') };
             }
 
             if (isTopFrame) {
@@ -2281,14 +2316,16 @@
             if (!normalizeApiBaseUrl()) {
                 setStickOnline(false, 'Не указан API URL');
             } else {
-                setStickOnline(await probeBackendOnline());
+                setStickOnline(false, 'Ожидание данных из iframe');
             }
         }
 
         runStickCycle(true);
-        setInterval(() => {
-            runStickCycle();
-        }, CYCLE_INTERVAL_MS);
+        if (!isTopFrame) {
+            setInterval(() => {
+                runStickCycle();
+            }, CYCLE_INTERVAL_MS);
+        }
 
         if (isTopFrame) {
             setInterval(() => {

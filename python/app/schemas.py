@@ -9,6 +9,7 @@ class ContextModel(BaseModel):
     fullUrl: str
     title: str = ''
     testKey: str
+    participantKey: str = ''
 
 
 class OpenEduAnswerIn(BaseModel):

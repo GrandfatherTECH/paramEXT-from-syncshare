@@ -61,6 +61,17 @@ class Database:
                     PRIMARY KEY (test_key, question_key, answer_key)
                 );
 
+                CREATE TABLE IF NOT EXISTS openedu_participant_question_state (
+                    test_key TEXT NOT NULL,
+                    participant_key TEXT NOT NULL,
+                    question_key TEXT NOT NULL,
+                    selected_answer_keys TEXT[] NOT NULL DEFAULT '{}',
+                    verified_answer_keys TEXT[] NOT NULL DEFAULT '{}',
+                    is_correct BOOLEAN NOT NULL DEFAULT FALSE,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (test_key, participant_key, question_key)
+                );
+
                 CREATE TABLE IF NOT EXISTS openedu_attempts (
                     id BIGSERIAL PRIMARY KEY,
                     test_key TEXT NOT NULL,
@@ -80,6 +91,7 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_openedu_attempts_test_key ON openedu_attempts (test_key);
                 CREATE INDEX IF NOT EXISTS idx_openedu_questions_test_key ON openedu_questions (test_key);
                 CREATE INDEX IF NOT EXISTS idx_openedu_stats_test_key ON openedu_answer_stats (test_key);
+                CREATE INDEX IF NOT EXISTS idx_openedu_participant_state_test_key ON openedu_participant_question_state (test_key);
                 CREATE INDEX IF NOT EXISTS idx_extension_logs_kind ON extension_logs (kind);
                 """
             )
@@ -89,6 +101,7 @@ class Database:
         context = payload['context']
         questions = payload.get('questions', [])
         completed = bool(payload.get('completed', False))
+        participant_key = str(context.get('participantKey') or '').strip() or 'anonymous'
 
         async with self.pool.acquire() as conn:
             async with conn.transaction():
@@ -118,6 +131,10 @@ class Database:
                 for question in questions:
                     # `verified` from the extension means the UI exposed correctness markers,
                     # not that the user solved the question correctly.
+                    question_key = str(question.get('questionKey') or '').strip()
+                    if not question_key:
+                        continue
+
                     question_correct = bool(question.get('isCorrect'))
                     answers = question.get('answers', [])
                     selected_answers_count = sum(1 for answer in answers if bool(answer.get('selected')))
@@ -129,6 +146,50 @@ class Database:
                     if has_explicit_correct_answers and selected_answers_count <= 1 and explicit_correct_answers_count > 1:
                         has_explicit_correct_answers = False
 
+                    answer_text_by_key: dict[str, str] = {}
+                    selected_answer_keys: set[str] = set()
+                    verified_answer_keys: set[str] = set()
+
+                    for answer in answers:
+                        answer_key = str(answer.get('answerKey') or '').strip()
+                        if not answer_key:
+                            continue
+
+                        answer_text_by_key[answer_key] = str(answer.get('answerText') or '').strip()
+                        if bool(answer.get('selected')):
+                            selected_answer_keys.add(answer_key)
+
+                        if (
+                            question_correct
+                            and has_explicit_correct_answers
+                            and bool(answer.get('selected'))
+                            and bool(answer.get('correct'))
+                        ):
+                            verified_answer_keys.add(answer_key)
+
+                    previous_state = await conn.fetchrow(
+                        """
+                        SELECT selected_answer_keys, verified_answer_keys, is_correct
+                        FROM openedu_participant_question_state
+                        WHERE test_key = $1
+                          AND participant_key = $2
+                          AND question_key = $3
+                        """,
+                        context['testKey'],
+                        participant_key,
+                        question_key,
+                    )
+
+                    prev_selected_keys = set(previous_state['selected_answer_keys'] or []) if previous_state else set()
+                    prev_verified_keys = set(previous_state['verified_answer_keys'] or []) if previous_state else set()
+                    prev_is_correct = bool(previous_state['is_correct']) if previous_state else False
+
+                    completed_delta = 0
+                    if question_correct and not prev_is_correct:
+                        completed_delta = 1
+                    elif prev_is_correct and not question_correct:
+                        completed_delta = -1
+
                     await conn.execute(
                         """
                         INSERT INTO openedu_questions (test_key, question_key, prompt, completed_count, updated_at)
@@ -136,28 +197,24 @@ class Database:
                         ON CONFLICT (test_key, question_key)
                         DO UPDATE
                         SET prompt = EXCLUDED.prompt,
-                            completed_count = openedu_questions.completed_count + $4,
+                            completed_count = GREATEST(0, openedu_questions.completed_count + $4),
                             updated_at = NOW()
                         """,
                         context['testKey'],
-                        question['questionKey'],
+                        question_key,
                         question.get('prompt', ''),
-                        1 if completed else 0,
+                        completed_delta,
                     )
 
-                    for answer in answers:
-                        answer_selected = bool(answer.get('selected'))
-                        answer_correct = bool(answer.get('correct')) if has_explicit_correct_answers else False
+                    added_selected = selected_answer_keys - prev_selected_keys
+                    removed_selected = prev_selected_keys - selected_answer_keys
+                    added_verified = verified_answer_keys - prev_verified_keys
+                    removed_verified = prev_verified_keys - verified_answer_keys
 
-                        verified_increment = 1 if question_correct and has_explicit_correct_answers and answer_correct else 0
-
-                        # Fallback stats are allowed only when the question itself is correct,
-                        # and only when explicit correct flags are unavailable.
-                        fallback_increment = 0
-                        if question_correct and not has_explicit_correct_answers and answer_selected:
-                            fallback_increment = 1
-
-                        if fallback_increment == 0 and verified_increment == 0:
+                    for answer_key in (added_selected | added_verified):
+                        selected_inc = 1 if answer_key in added_selected else 0
+                        verified_inc = 1 if answer_key in added_verified else 0
+                        if selected_inc == 0 and verified_inc == 0:
                             continue
 
                         await conn.execute(
@@ -180,12 +237,76 @@ class Database:
                                 updated_at = NOW()
                             """,
                             context['testKey'],
-                            question['questionKey'],
-                            answer['answerKey'],
-                            answer['answerText'],
-                            verified_increment,
-                            fallback_increment,
+                            question_key,
+                            answer_key,
+                            answer_text_by_key.get(answer_key, ''),
+                            verified_inc,
+                            selected_inc,
                         )
+
+                    for answer_key in (removed_selected | removed_verified):
+                        selected_dec = 1 if answer_key in removed_selected else 0
+                        verified_dec = 1 if answer_key in removed_verified else 0
+                        if selected_dec == 0 and verified_dec == 0:
+                            continue
+
+                        await conn.execute(
+                            """
+                            UPDATE openedu_answer_stats
+                            SET verified_count = GREATEST(0, verified_count - $4),
+                                fallback_count = GREATEST(0, fallback_count - $5),
+                                updated_at = NOW()
+                            WHERE test_key = $1
+                              AND question_key = $2
+                              AND answer_key = $3
+                            """,
+                            context['testKey'],
+                            question_key,
+                            answer_key,
+                            verified_dec,
+                            selected_dec,
+                        )
+
+                        await conn.execute(
+                            """
+                            DELETE FROM openedu_answer_stats
+                            WHERE test_key = $1
+                              AND question_key = $2
+                              AND answer_key = $3
+                              AND verified_count = 0
+                              AND fallback_count = 0
+                            """,
+                            context['testKey'],
+                            question_key,
+                            answer_key,
+                        )
+
+                    await conn.execute(
+                        """
+                        INSERT INTO openedu_participant_question_state (
+                            test_key,
+                            participant_key,
+                            question_key,
+                            selected_answer_keys,
+                            verified_answer_keys,
+                            is_correct,
+                            updated_at
+                        )
+                        VALUES ($1, $2, $3, $4::text[], $5::text[], $6, NOW())
+                        ON CONFLICT (test_key, participant_key, question_key)
+                        DO UPDATE
+                        SET selected_answer_keys = EXCLUDED.selected_answer_keys,
+                            verified_answer_keys = EXCLUDED.verified_answer_keys,
+                            is_correct = EXCLUDED.is_correct,
+                            updated_at = NOW()
+                        """,
+                        context['testKey'],
+                        participant_key,
+                        question_key,
+                        sorted(selected_answer_keys),
+                        sorted(verified_answer_keys),
+                        question_correct,
+                    )
 
     async def query_openedu_stats(self, test_key: str, question_keys: list[str]) -> dict[str, Any]:
         assert self.pool is not None
@@ -210,7 +331,7 @@ class Database:
                 FROM openedu_answer_stats
                 WHERE test_key = $1
                   AND question_key = ANY($2::text[])
-                ORDER BY question_key, verified_count DESC, fallback_count DESC
+                                ORDER BY question_key, fallback_count DESC, verified_count DESC
                 """,
                 test_key,
                 question_keys,
