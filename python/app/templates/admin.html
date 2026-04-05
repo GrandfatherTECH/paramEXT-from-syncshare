@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ app_name }} - Админ-панель</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+            background: #f2f6fc;
+            color: #163a65;
+        }
+        .shell {
+            max-width: 1080px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+        .title {
+            margin-bottom: 14px;
+        }
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .card {
+            border: 1px solid #d0e1f7;
+            border-radius: 12px;
+            background: #ffffff;
+            padding: 14px;
+        }
+        .card p {
+            margin: 0;
+            font-size: 12px;
+            color: #4a6a91;
+        }
+        .card h3 {
+            margin: 8px 0 0;
+            font-size: 24px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #ffffff;
+            border: 1px solid #d0e1f7;
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 16px;
+        }
+        th, td {
+            text-align: left;
+            padding: 10px;
+            border-bottom: 1px solid #e6eef8;
+            font-size: 12px;
+            vertical-align: top;
+        }
+        th {
+            background: #f1f6fd;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #486b98;
+        }
+        pre {
+            margin: 0;
+            white-space: pre-wrap;
+            max-width: 500px;
+            overflow-wrap: anywhere;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <h1 class="title">{{ app_name }} - Админ-панель</h1>
+
+        <section class="cards">
+            <article class="card">
+                <p>Тесты</p>
+                <h3>{{ snapshot.counters.tests_count }}</h3>
+            </article>
+            <article class="card">
+                <p>Вопросы</p>
+                <h3>{{ snapshot.counters.questions_count }}</h3>
+            </article>
+            <article class="card">
+                <p>Попытки</p>
+                <h3>{{ snapshot.counters.attempts_count }}</h3>
+            </article>
+            <article class="card">
+                <p>Логи</p>
+                <h3>{{ snapshot.counters.logs_count }}</h3>
+            </article>
+        </section>
+
+        <h2>Топ тестов</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Ключ теста</th>
+                    <th>Хост</th>
+                    <th>Путь</th>
+                    <th>Кол-во завершений</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for item in snapshot.top_tests %}
+                <tr>
+                    <td>{{ item.test_key }}</td>
+                    <td>{{ item.host }}</td>
+                    <td>{{ item.path }}</td>
+                    <td>{{ item.completed_count }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+
+        <h2>Последние логи</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Время</th>
+                    <th>Тип</th>
+                    <th>Система</th>
+                    <th>Данные</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for log in snapshot.recent_logs %}
+                <tr>
+                    <td>{{ log.created_at }}</td>
+                    <td>{{ log.kind }}</td>
+                    <td><pre>{{ log.system }}</pre></td>
+                    <td><pre>{{ log.payload }}</pre></td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>

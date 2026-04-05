@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,53 +8,130 @@
     <link href="../../css/popup/popup_new.css" rel="stylesheet">
 </head>
 <body>
-    <div class="header">
-        <img src="../../logo.png" alt="Logo" class="logo" id="mainLogo">
-        <h3>paramEXT</h3>
-        <small style="color: #6c757d; font-size: 0.8em;">Powered by SyncShare</small>
+    <div class="popup-shell">
+        <header class="popup-header">
+            <img src="../../logo_main.png" alt="Logo" class="logo" id="mainLogo">
+            <div>
+                <h1>paramEXT</h1>
+                <p class="subline">Moodle и OpenEdu</p>
+            </div>
+        </header>
+
+        <section class="platform-switch" aria-label="Переключение платформы">
+            <button type="button" id="platformMoodle" class="platform-btn" data-platform="moodle">Moodle</button>
+            <button type="button" id="platformOpenedu" class="platform-btn" data-platform="openedu">OpenEdu</button>
+        </section>
+
+        <section id="moodleSettings" class="settings-card">
+            <h2>Настройки Moodle</h2>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="moodleMode" id="modeWand" value="wand">
+                <label class="form-check-label" for="modeWand">Палочка</label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="moodleMode" id="modeAutoInsert" value="autoInsert">
+                <label class="form-check-label" for="modeAutoInsert">Авто-вставка</label>
+            </div>
+            <div class="form-check mb-2">
+                <input class="form-check-input" type="radio" name="moodleMode" id="modeAutoSolve" value="autoSolve">
+                <label class="form-check-label" for="modeAutoSolve">Авто-прорешивание</label>
+            </div>
+
+            <div id="autoSolveControls" class="hidden mb-2">
+                <div class="button-line">
+                    <button id="btnStart" class="btn btn-sm btn-success" type="button">Старт</button>
+                    <button id="btnStop" class="btn btn-sm btn-danger hidden" type="button">Стоп</button>
+                </div>
+            </div>
+
+            <div class="mb-2">
+                <label for="wandKey" class="form-label">Горячая клавиша (захват)</label>
+                <input type="text" class="form-control form-control-sm hotkey-input" id="wandKey" readonly>
+            </div>
+            <div class="mb-2">
+                <label for="nextBtnSelector" class="form-label">Текст кнопки Далее</label>
+                <input type="text" class="form-control form-control-sm" id="nextBtnSelector">
+            </div>
+        </section>
+
+        <section id="openeduSettings" class="settings-card hidden">
+            <h2>Настройки OpenEdu</h2>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="openeduMode" id="openeduModeStick" value="stick">
+                <label class="form-check-label" for="openeduModeStick">Только стик</label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="openeduMode" id="openeduModeAssist" value="assist">
+                <label class="form-check-label" for="openeduModeAssist">Подсказки + проверка</label>
+            </div>
+            <div class="form-check mb-2">
+                <input class="form-check-input" type="radio" name="openeduMode" id="openeduModeAuto" value="autoSolve">
+                <label class="form-check-label" for="openeduModeAuto">Автоматический режим</label>
+            </div>
+
+            <div class="mb-2">
+                <label for="openeduHotkey" class="form-label">Горячая клавиша стика</label>
+                <input type="text" class="form-control form-control-sm hotkey-input" id="openeduHotkey" readonly>
+            </div>
+
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="openeduAutoAdvanceEnabled">
+                <label class="form-check-label" for="openeduAutoAdvanceEnabled">Авто-переход после прохождения раздела</label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="openeduRequiredCompletionOnly">
+                <label class="form-check-label" for="openeduRequiredCompletionOnly">Переходить только после статуса "пройдено"</label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="openeduActiveTabRefreshEnabled">
+                <label class="form-check-label" for="openeduActiveTabRefreshEnabled">Обновлять состояние активного раздела</label>
+            </div>
+            <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" id="openeduShowFallbackStats">
+                <label class="form-check-label" for="openeduShowFallbackStats">Использовать резервную статистику (как в Moodle)</label>
+            </div>
+
+            <div class="mb-2">
+                <label for="openeduAutoAdvanceDelayMs" class="form-label">Задержка авто-перехода (мс)</label>
+                <input type="number" min="500" step="100" class="form-control form-control-sm" id="openeduAutoAdvanceDelayMs">
+            </div>
+        </section>
+
+        <div class="actions">
+            <button id="btnSave" class="btn btn-primary w-100" type="button">Сохранить</button>
+            <a class="subscribe-btn" href="https://t.me/paramext_news" target="_blank" rel="noopener noreferrer">Подписаться на обновления расширения</a>
+            <button id="toggleBackendSettingsBtn" class="settings-mini-btn" type="button">Настройки API</button>
+        </div>
+
+        <section id="backendSettingsPanel" class="settings-card backend-panel hidden">
+            <h2>Подключение к бэкенду</h2>
+            <section class="platform-switch compact" aria-label="Платформа для API">
+                <button type="button" id="backendPlatformMoodle" class="platform-btn" data-api-platform="moodle">API Moodle</button>
+                <button type="button" id="backendPlatformOpenedu" class="platform-btn" data-api-platform="openedu">API OpenEdu</button>
+            </section>
+            <div class="mb-2">
+                <label for="backendApiBaseUrl" class="form-label">Адрес API</label>
+                <input type="text" class="form-control form-control-sm" id="backendApiBaseUrl" placeholder="https://api.example.com">
+            </div>
+            <div class="mb-2">
+                <label for="backendApiToken" class="form-label">Bearer токен (необязательно)</label>
+                <input type="password" class="form-control form-control-sm" id="backendApiToken" placeholder="публичный bearer токен">
+            </div>
+            <div class="mb-2">
+                <label for="backendRequestTimeoutMs" class="form-label">Таймаут запросов (мс)</label>
+                <input type="number" min="1000" step="250" class="form-control form-control-sm" id="backendRequestTimeoutMs">
+            </div>
+            <div class="backend-row">
+                <button id="backendPingBtn" class="btn btn-sm btn-outline-primary" type="button">Проверить API</button>
+                <span id="backendPingStatus" class="backend-status">Не проверено</span>
+            </div>
+        </section>
+
+        <p class="footer-note">Нажмите клавишу или комбинацию прямо в поле горячей клавиши для автоматического захвата.</p>
     </div>
 
-    <div class="mode-group">
-        <h5>Режим</h5>
-        <div class="form-check">
-            <input class="form-check-input" type="radio" name="mode" id="modeWand" value="wand" checked>
-            <label class="form-check-label" for="modeWand">
-                Палочка
-            </label>
-        </div>
-        <div class="form-check">
-            <input class="form-check-input" type="radio" name="mode" id="modeAutoInsert" value="autoInsert">
-            <label class="form-check-label" for="modeAutoInsert">
-                Авто-вставка ответов
-            </label>
-        </div>
-        <div class="form-check">
-            <input class="form-check-input" type="radio" name="mode" id="modeAutoSolve" value="autoSolve">
-            <label class="form-check-label" for="modeAutoSolve">
-                Авто-прорешивание
-            </label>
-        </div>
-    </div>
-
-    <div id="autoSolveControls" class="hidden mb-3">
-        <button id="btnStart" class="btn btn-success w-100">Начать</button>
-        <button id="btnStop" class="btn btn-danger w-100 hidden">Остановить</button>
-    </div>
-
-    <div class="settings-group">
-        <h5>Настройки</h5>
-        <div class="mb-2">
-            <label for="wandKey" class="form-label">Клавиша скрытия палочки</label>
-            <input type="text" class="form-control" id="wandKey" placeholder="Например: KeyQ">
-        </div>
-        <div class="mb-2">
-            <label for="nextBtnSelector" class="form-label">Название кнопки "Далее"</label>
-            <input type="text" class="form-control" id="nextBtnSelector" value="Следующая страница">
-        </div>
-        <button id="btnSave" class="btn btn-primary w-100 mt-2">Сохранить</button>
-        <div>tg: @vporn_ofic_bot</div>
-    </div>
-
+    <script src="../../js/platform_settings.js"></script>
+    <script src="../../js/telemetry.js"></script>
     <script src="../../js/popup_new.js"></script>
 </body>
 </html>

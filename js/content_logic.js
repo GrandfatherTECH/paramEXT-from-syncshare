@@ -1,62 +1,52 @@
-(async function() {
+(async function () {
+    if (window.ParamExtTelemetry) {
+        window.ParamExtTelemetry.installGlobalHandlers('moodle-content');
+    }
+
     let settings = {
         mode: 'wand',
-        wandKey: 'KeyQ',
-        nextBtnText: 'Следующая страница',
+        wandHotkey: 'Escape',
+        nextButtonText: 'Следующая страница',
         autoSolving: false
     };
 
-    // Load settings
-    try {
-        const data = await chrome.storage.local.get('paramExtSettings');
-        if (data.paramExtSettings) {
-            settings = data.paramExtSettings;
+    async function loadSettings() {
+        if (window.ParamExtSettings) {
+            const merged = await window.ParamExtSettings.getSettings();
+            settings = {
+                mode: merged.moodle.mode,
+                wandHotkey: merged.moodle.wandHotkey,
+                nextButtonText: merged.moodle.nextButtonText,
+                autoSolving: merged.moodle.autoSolving
+            };
+            return;
         }
-    } catch (e) {
-        console.log('paramEXT: Context invalidated or storage error', e);
-    }
 
-    // Listen for messages
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        if (message.type === 'SETTINGS_UPDATED') {
-            settings = message.settings;
-            applySettings();
-        } else if (message.type === 'START_AUTO_SOLVE') {
-            settings.autoSolving = true;
-            // Reload to trigger quiz_attempt.js with new settings
-            window.location.reload();
-        } else if (message.type === 'STOP_AUTO_SOLVE') {
-            settings.autoSolving = false;
-        }
-    });
-
-    // Key listener for Wand Toggle
-    document.addEventListener('keydown', (e) => {
-        if (e.code === settings.wandKey) {
-            toggleWands();
-        }
-    });
-
-    // Initial apply
-    applySettings();
-
-    function applySettings() {
-        if (settings.mode === 'wand') {
-            showWands();
-        } else if (settings.mode === 'autoSolve' && settings.autoSolving) {
-            // Wait for quiz_attempt.js to insert answers, then click next
-            setTimeout(clickNextButton, 4000);
+        try {
+            const data = await chrome.storage.local.get('paramExtSettings');
+            if (data.paramExtSettings) {
+                settings = {
+                    mode: data.paramExtSettings.mode || settings.mode,
+                    wandHotkey: data.paramExtSettings.wandKey || settings.wandHotkey,
+                    nextButtonText: data.paramExtSettings.nextBtnText || settings.nextButtonText,
+                    autoSolving: Boolean(data.paramExtSettings.autoSolving)
+                };
+            }
+        } catch (_) {
+            // Keep defaults if storage cannot be read.
         }
     }
 
-    function getAllShadowRoots(node = document.body) {
+    function getAllShadowRoots(node) {
+        const rootNode = node || document.body;
         const shadowRoots = [];
-        const walker = document.createTreeWalker(node, NodeFilter.SHOW_ELEMENT);
-        while(walker.nextNode()) {
-            const el = walker.currentNode;
-            if (el.shadowRoot) {
-                shadowRoots.push(el.shadowRoot);
-                shadowRoots.push(...getAllShadowRoots(el.shadowRoot));
+        const walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_ELEMENT);
+        while (walker.nextNode()) {
+            const element = walker.currentNode;
+            if (element.shadowRoot) {
+                shadowRoots.push(element.shadowRoot);
+                const nested = getAllShadowRoots(element.shadowRoot);
+                nested.forEach((item) => shadowRoots.push(item));
             }
         }
         return shadowRoots;
@@ -65,41 +55,119 @@
     function getMagicButtons() {
         const buttons = [];
         const roots = getAllShadowRoots();
-        roots.forEach(root => {
-            const btn = root.querySelector('.icon.magic');
-            if (btn) {
-                buttons.push(btn);
+        roots.forEach((root) => {
+            const button = root.querySelector('.icon.magic');
+            if (button) {
+                buttons.push(button);
             }
         });
         return buttons;
     }
 
-    function toggleWands() {
-        const buttons = getMagicButtons();
-        buttons.forEach(btn => {
-            if (btn.style.display === 'none') {
-                btn.style.display = '';
-            } else {
-                btn.style.display = 'none';
-            }
+    function setWandsVisible(visible) {
+        getMagicButtons().forEach((button) => {
+            button.style.display = visible ? '' : 'none';
         });
     }
 
-    function showWands() {
+    function toggleWands() {
         const buttons = getMagicButtons();
-        buttons.forEach(btn => {
-            btn.style.display = '';
-        });
+        const hasHidden = buttons.some((button) => button.style.display === 'none');
+        setWandsVisible(hasHidden);
     }
 
     function clickNextButton() {
-        const nextBtn = document.querySelector(`input[type="submit"][value="${settings.nextBtnText}"]`);
-        if (nextBtn) {
-            console.log('paramEXT: Clicking Next button');
-            nextBtn.click();
-        } else {
-            console.log('paramEXT: Next button not found.');
+        const byValue = document.querySelector('input[type="submit"][value="' + settings.nextButtonText + '"]');
+        if (byValue) {
+            byValue.click();
+            return;
+        }
+
+        const byText = Array.from(document.querySelectorAll('button, input[type="submit"]')).find((element) => {
+            if (!(element instanceof HTMLElement)) {
+                return false;
+            }
+
+            if (element instanceof HTMLInputElement) {
+                return element.value.trim() === settings.nextButtonText;
+            }
+
+            return (element.textContent || '').trim() === settings.nextButtonText;
+        });
+
+        if (byText && byText instanceof HTMLElement) {
+            byText.click();
         }
     }
 
+    function applySettings() {
+        if (settings.mode === 'wand') {
+            setWandsVisible(true);
+        }
+
+        if (settings.mode === 'autoSolve' && settings.autoSolving) {
+            setTimeout(clickNextButton, 3500);
+        }
+    }
+
+    chrome.runtime.onMessage.addListener((message) => {
+        if (!message || typeof message !== 'object') {
+            return;
+        }
+
+        if (message.type === 'SETTINGS_UPDATED') {
+            if (message.settings && message.settings.moodle) {
+                settings = {
+                    mode: message.settings.moodle.mode,
+                    wandHotkey: message.settings.moodle.wandHotkey,
+                    nextButtonText: message.settings.moodle.nextButtonText,
+                    autoSolving: Boolean(message.settings.moodle.autoSolving)
+                };
+            } else if (message.settings) {
+                settings = {
+                    mode: message.settings.mode || settings.mode,
+                    wandHotkey: message.settings.wandKey || settings.wandHotkey,
+                    nextButtonText: message.settings.nextBtnText || settings.nextButtonText,
+                    autoSolving: Boolean(message.settings.autoSolving)
+                };
+            }
+            applySettings();
+        }
+
+        if (message.type === 'START_AUTO_SOLVE') {
+            settings.autoSolving = true;
+            if (settings.mode === 'autoSolve') {
+                window.location.reload();
+            }
+        }
+
+        if (message.type === 'STOP_AUTO_SOLVE') {
+            settings.autoSolving = false;
+        }
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (window.ParamExtSettings) {
+            if (window.ParamExtSettings.hotkeyMatches(event, settings.wandHotkey)) {
+                toggleWands();
+            }
+            return;
+        }
+
+        if (event.code === settings.wandHotkey || event.key === settings.wandHotkey) {
+            toggleWands();
+        }
+    });
+
+    await loadSettings();
+
+    if (window.ParamExtTelemetry) {
+        window.ParamExtTelemetry.push('system_state', {
+            mode: settings.mode,
+            autoSolving: settings.autoSolving,
+            host: location.host
+        }, 'moodle-content');
+    }
+
+    applySettings();
 })();
