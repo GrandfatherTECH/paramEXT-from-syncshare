@@ -31,6 +31,7 @@
       "matches": [ "*://*/*" ],
       "run_at": "document_idle"
    }, {
+      "all_frames": true,
       "css": [ "css/widgets/openedu_stick.css" ],
       "include_globs": [ "*://*.openedu.ru/*" ],
       "js": [ "js/platform_settings.js", "js/telemetry.js", "js/openedu_content.js" ],
