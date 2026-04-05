@@ -2271,7 +2271,7 @@
             }
 
             setTimeout(() => {
-                scheduleCycle(true);
+                scheduleCycle(isSubmit);
             }, 300);
         }, true);
 
