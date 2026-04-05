@@ -12,7 +12,7 @@
       "default_title": "paramEXT"
    },
    "background": {
-      "service_worker": "js/background.js"
+      "service_worker": "js/background_worker.js"
    },
    "content_scripts": [ {
       "css": [ "css/widgets/context_menu.css" ],

@@ -219,11 +219,6 @@ class Database:
             if fallback_count > 0:
                 entry['fallbackAnswers'].append({'answerText': answer_text, 'count': fallback_count})
 
-        for question_key, entry in result.items():
-            if int(entry.get('completedCount', 0)) <= 0:
-                entry['verifiedAnswers'] = []
-                entry['fallbackAnswers'] = []
-
         return result
 
     async def write_log(self, kind: str, payload: dict[str, Any], system: dict[str, Any]) -> None:

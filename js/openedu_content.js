@@ -43,15 +43,37 @@
         return raw.trim().replace(/\/$/, '');
     }
 
-    function getAuthHeaders() {
+    function getAuthHeaders(withJsonContentType) {
         const token = settings?.backend?.openedu?.apiToken || settings?.backend?.apiToken || '';
-        const headers = {
-            'Content-Type': 'application/json'
-        };
+        const headers = {};
+        if (withJsonContentType) {
+            headers['Content-Type'] = 'application/json';
+        }
         if (token.length > 0) {
             headers.Authorization = 'Bearer ' + token;
         }
         return headers;
+    }
+
+    async function requestViaBackground(request) {
+        return await new Promise((resolve) => {
+            if (!chrome.runtime || typeof chrome.runtime.sendMessage !== 'function') {
+                resolve(null);
+                return;
+            }
+
+            chrome.runtime.sendMessage({
+                type: 'PARAMEXT_HTTP',
+                request
+            }, (response) => {
+                const lastError = chrome.runtime.lastError;
+                if (lastError) {
+                    resolve(null);
+                    return;
+                }
+                resolve(response || null);
+            });
+        });
     }
 
     async function apiPost(path, body) {
@@ -61,13 +83,32 @@
         }
 
         const timeoutMs = Number(settings?.backend?.openedu?.requestTimeoutMs || settings?.backend?.requestTimeoutMs || 4000);
+
+        const bgResponse = await requestViaBackground({
+            url: baseUrl + path,
+            method: 'POST',
+            headers: getAuthHeaders(true),
+            body: JSON.stringify(body),
+            timeoutMs
+        });
+
+        if (bgResponse) {
+            if (!bgResponse.ok) {
+                return null;
+            }
+            if (bgResponse.json && typeof bgResponse.json === 'object') {
+                return bgResponse.json;
+            }
+            return null;
+        }
+
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
 
         try {
             const response = await fetch(baseUrl + path, {
                 method: 'POST',
-                headers: getAuthHeaders(),
+                headers: getAuthHeaders(true),
                 body: JSON.stringify(body),
                 signal: controller.signal
             });
@@ -91,13 +132,31 @@
         }
 
         const timeoutMs = Number(settings?.backend?.openedu?.requestTimeoutMs || settings?.backend?.requestTimeoutMs || 4000);
+
+        const bgResponse = await requestViaBackground({
+            url: baseUrl + path,
+            method: 'GET',
+            headers: getAuthHeaders(false),
+            timeoutMs
+        });
+
+        if (bgResponse) {
+            if (!bgResponse.ok) {
+                return null;
+            }
+            if (bgResponse.json && typeof bgResponse.json === 'object') {
+                return bgResponse.json;
+            }
+            return null;
+        }
+
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
 
         try {
             const response = await fetch(baseUrl + path, {
                 method: 'GET',
-                headers: getAuthHeaders(),
+                headers: getAuthHeaders(false),
                 signal: controller.signal
             });
             if (!response.ok) {
@@ -109,6 +168,57 @@
         } finally {
             clearTimeout(timer);
         }
+    }
+
+    async function probeBackendOnline() {
+        const baseUrl = normalizeApiBaseUrl();
+        if (!baseUrl) {
+            return false;
+        }
+
+        const timeoutMs = Number(settings?.backend?.openedu?.requestTimeoutMs || settings?.backend?.requestTimeoutMs || 4000);
+        const headers = getAuthHeaders(false);
+        const probePaths = ['/healthz', '/health', '/v2/status'];
+        let hasHttpResponse = false;
+
+        for (const path of probePaths) {
+            const bgResponse = await requestViaBackground({
+                url: baseUrl + path,
+                method: 'GET',
+                headers,
+                timeoutMs
+            });
+
+            if (bgResponse) {
+                hasHttpResponse = true;
+                if (bgResponse.status !== 404) {
+                    return true;
+                }
+                continue;
+            }
+
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+            try {
+                const response = await fetch(baseUrl + path, {
+                    method: 'GET',
+                    headers,
+                    signal: controller.signal
+                });
+
+                hasHttpResponse = true;
+                if (response.status !== 404) {
+                    return true;
+                }
+            } catch (_) {
+                // Continue probing known health endpoints.
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+        return hasHttpResponse;
     }
 
     function getCourseContext() {
@@ -126,41 +236,190 @@
     }
 
     function getQuestionBlocks() {
-        const blocks = Array.from(document.querySelectorAll('.problems-wrapper[data-problem-id], .xblock-student_view-problem .problems-wrapper'));
-        return blocks.filter((element) => element instanceof HTMLElement);
+        const selectors = [
+            '.problems-wrapper[data-problem-id]',
+            '.xblock-student_view-problem .problems-wrapper',
+            '.problems-wrapper',
+            '[data-problem-id]',
+            '[id^="problem_"]'
+        ];
+
+        const seen = new Set();
+        const result = [];
+
+        selectors.forEach((selector) => {
+            const nodes = document.querySelectorAll(selector);
+            nodes.forEach((node) => {
+                if (!(node instanceof HTMLElement) || seen.has(node)) {
+                    return;
+                }
+
+                const hasAnswers = Boolean(node.querySelector('label[for], input[type="radio"], input[type="checkbox"]'));
+                if (!hasAnswers) {
+                    return;
+                }
+
+                seen.add(node);
+                result.push(node);
+            });
+        });
+
+        return result;
     }
 
     function getQuestionPrompt(root) {
-        const labelNode = root.querySelector('.problem-header, .wrapper-problem-response p, .wrapper-problem-response h3');
-        return textOf(labelNode);
+        const labelNode = root.querySelector('.problem-header, .wrapper-problem-response p, .wrapper-problem-response h3, legend, .problem-title');
+        const prompt = textOf(labelNode);
+        if (prompt) {
+            return prompt;
+        }
+
+        return textOf(root.querySelector('h2, h3, p'));
+    }
+
+    function isOptionMarkedCorrect(label, input) {
+        const classText = (String(label?.className || '') + ' ' + String(input?.className || '')).toLowerCase();
+        if (classText.includes('incorrect') || classText.includes('wrong')) {
+            return false;
+        }
+
+        if (classText.includes('choicegroup_correct')) {
+            return true;
+        }
+
+        if (/(^|[^a-z])correct([^a-z]|$)/.test(classText)) {
+            return true;
+        }
+
+        const aria = String(label?.getAttribute?.('aria-label') || '').toLowerCase();
+        return aria.includes('correct') || aria.includes('верно');
     }
 
     function getAnswerOptions(root) {
         const options = [];
-        const labels = root.querySelectorAll('label.response-label, label.field-label');
+        const labels = root.querySelectorAll('label.response-label, label.field-label, .choicegroup label[for], label[for]');
+        const usedKeys = new Set();
 
         labels.forEach((label, idx) => {
             const inputId = label.getAttribute('for') || '';
-            const input = inputId ? root.querySelector('#' + CSS.escape(inputId)) : null;
+            const input = inputId ? root.querySelector('#' + CSS.escape(inputId)) : label.querySelector('input[type="radio"], input[type="checkbox"]');
             const answerText = textOf(label);
             if (!answerText) {
                 return;
             }
 
+            const dedupeKey = inputId || answerText;
+            if (usedKeys.has(dedupeKey)) {
+                return;
+            }
+            usedKeys.add(dedupeKey);
+
             options.push({
-                answerKey: hash(answerText + '|' + idx),
+                answerKey: hash(answerText + '|' + (inputId || idx)),
                 answerText,
                 selected: Boolean(input && input.checked),
-                correct: label.classList.contains('choicegroup_correct')
+                correct: isOptionMarkedCorrect(label, input)
             });
         });
+
+        if (options.length === 0) {
+            const inputs = root.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+            inputs.forEach((input, idx) => {
+                if (!(input instanceof HTMLInputElement)) {
+                    return;
+                }
+
+                const inputId = input.id || '';
+                const label = inputId ? root.querySelector('label[for="' + CSS.escape(inputId) + '"]') : input.closest('label');
+                const answerText = textOf(label);
+                if (!answerText) {
+                    return;
+                }
+
+                options.push({
+                    answerKey: hash(answerText + '|' + (inputId || idx)),
+                    answerText,
+                    selected: Boolean(input.checked),
+                    correct: isOptionMarkedCorrect(label, input)
+                });
+            });
+        }
 
         return options;
     }
 
     function isQuestionCorrect(root) {
-        const statusNode = root.querySelector('.status.correct, .message .feedback-hint-correct');
+        const statusNode = root.querySelector('.status.correct, .message .feedback-hint-correct, .feedback-hint-correct, [data-correct="true"]');
         return Boolean(statusNode);
+    }
+
+    function createEmptyStatsEntry() {
+        return {
+            completedCount: 0,
+            verifiedAnswers: [],
+            fallbackAnswers: []
+        };
+    }
+
+    function buildLocalFallbackStats(questions) {
+        const local = {};
+
+        questions.forEach((question) => {
+            const selected = question.options
+                .filter((option) => option.selected)
+                .slice(0, MAX_ANSWERS_PER_QUESTION)
+                .map((option) => ({ answerText: option.answerText, count: 1 }));
+
+            if (selected.length === 0) {
+                return;
+            }
+
+            local[question.questionKey] = {
+                completedCount: 0,
+                verifiedAnswers: [],
+                fallbackAnswers: selected,
+                localOnly: true
+            };
+        });
+
+        return local;
+    }
+
+    function mergeStatsByQuestion(remoteStatsByQuestion, localStatsByQuestion, questions) {
+        const merged = {};
+
+        questions.forEach((question) => {
+            const key = question.questionKey;
+            const remote = remoteStatsByQuestion && remoteStatsByQuestion[key]
+                ? remoteStatsByQuestion[key]
+                : createEmptyStatsEntry();
+            const local = localStatsByQuestion && localStatsByQuestion[key]
+                ? localStatsByQuestion[key]
+                : null;
+
+            const remoteVerified = Array.isArray(remote.verifiedAnswers) ? remote.verifiedAnswers.slice(0, MAX_ANSWERS_PER_QUESTION) : [];
+            const remoteFallback = Array.isArray(remote.fallbackAnswers) ? remote.fallbackAnswers.slice(0, MAX_ANSWERS_PER_QUESTION) : [];
+            const hasRemoteAnswers = remoteVerified.length > 0 || remoteFallback.length > 0;
+
+            if (hasRemoteAnswers || !local) {
+                merged[key] = {
+                    completedCount: Number(remote.completedCount || 0),
+                    verifiedAnswers: remoteVerified,
+                    fallbackAnswers: remoteFallback,
+                    localOnly: false
+                };
+                return;
+            }
+
+            merged[key] = {
+                completedCount: 0,
+                verifiedAnswers: [],
+                fallbackAnswers: local.fallbackAnswers,
+                localOnly: true
+            };
+        });
+
+        return merged;
     }
 
     function parseQuestions() {
@@ -297,7 +556,13 @@
             const meta = document.createElement('p');
             meta.className = 'paramext-question-meta';
             const completedCount = Number(stats.completedCount || 0);
-            meta.textContent = completedCount > 0 ? ('завершений: ' + completedCount) : 'ожидание данных';
+            if (completedCount > 0) {
+                meta.textContent = 'завершений: ' + completedCount;
+            } else if (stats.localOnly) {
+                meta.textContent = 'ответы на странице зафиксированы';
+            } else {
+                meta.textContent = 'ожидание данных';
+            }
 
             head.appendChild(title);
             head.appendChild(meta);
@@ -426,6 +691,8 @@
     async function runStickCycle() {
         const questions = parseQuestions();
         if (questions.length === 0) {
+            setStickOnline(await probeBackendOnline());
+            renderStick(null, []);
             return;
         }
 
@@ -433,9 +700,15 @@
 
         const statsResponse = await pullStatistics(questions);
         const statsByQuestion = statsResponse && statsResponse.statsByQuestion ? statsResponse.statsByQuestion : null;
+        const localFallbackStats = buildLocalFallbackStats(questions);
+        const mergedStatsByQuestion = mergeStatsByQuestion(statsByQuestion, localFallbackStats, questions);
 
-        setStickOnline(Boolean(statsByQuestion));
-        renderStick(statsByQuestion, questions);
+        if (statsResponse === null) {
+            setStickOnline(await probeBackendOnline());
+        } else {
+            setStickOnline(true);
+        }
+        renderStick(mergedStatsByQuestion, questions);
     }
 
     function isAutoAdvanceEnabled() {
@@ -499,6 +772,7 @@
                 return;
             }
             settings = await window.ParamExtSettings.getSettings();
+            runStickCycle();
         });
     }
 
@@ -518,8 +792,7 @@
         installKeyboardToggle();
         installStorageSync();
 
-        const health = await apiGet('/healthz');
-        setStickOnline(Boolean(health && health.status === 'ok'));
+        setStickOnline(await probeBackendOnline());
 
         setInterval(() => {
             runStickCycle();

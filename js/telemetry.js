@@ -1,6 +1,66 @@
 (function (global) {
     const MAX_QUEUE_SIZE = 20;
+    const RECOVERY_FLAG_KEY = '__paramext_context_recovery_ts';
+    const installedHandlerScopes = new Set();
     const queue = [];
+
+    function safeGetExtensionVersion() {
+        try {
+            if (!chrome || !chrome.runtime || typeof chrome.runtime.getManifest !== 'function') {
+                return 'unknown';
+            }
+            return chrome.runtime.getManifest().version || 'unknown';
+        } catch (_) {
+            return 'invalidated';
+        }
+    }
+
+    function getEventMessage(value) {
+        if (!value) {
+            return '';
+        }
+        if (typeof value === 'string') {
+            return value;
+        }
+        if (value instanceof Error && value.message) {
+            return String(value.message);
+        }
+        if (typeof value.message === 'string') {
+            return value.message;
+        }
+        return '';
+    }
+
+    function isExtensionContextInvalidated(value) {
+        const message = getEventMessage(value).toLowerCase();
+        return message.includes('extension context invalidated');
+    }
+
+    function recoverInvalidContext(scope, source) {
+        try {
+            const now = Date.now();
+            const last = Number(sessionStorage.getItem(RECOVERY_FLAG_KEY) || '0');
+            if (Number.isFinite(last) && now - last < 10000) {
+                return;
+            }
+
+            sessionStorage.setItem(RECOVERY_FLAG_KEY, String(now));
+            setTimeout(() => {
+                location.reload();
+            }, 150);
+        } catch (_) {
+            // Keep recovery best-effort only.
+        }
+
+        try {
+            console.warn('[paramEXT] Extension context invalidated, reloading tab...', {
+                scope,
+                source
+            });
+        } catch (_) {
+            // Ignore console failures.
+        }
+    }
 
     async function getSettingsSafe() {
         try {
@@ -35,13 +95,39 @@
     function buildSystemInfo(scope) {
         return {
             scope,
-            extensionVersion: chrome.runtime.getManifest().version,
+            extensionVersion: safeGetExtensionVersion(),
             userAgent: navigator.userAgent,
             language: navigator.language,
             platform: navigator.platform,
             url: location.href,
             timestamp: new Date().toISOString()
         };
+    }
+
+    async function requestViaBackground(request) {
+        return await new Promise((resolve) => {
+            try {
+                if (!chrome || !chrome.runtime || typeof chrome.runtime.sendMessage !== 'function') {
+                    resolve(null);
+                    return;
+                }
+            } catch (_) {
+                resolve(null);
+                return;
+            }
+
+            chrome.runtime.sendMessage({
+                type: 'PARAMEXT_HTTP',
+                request
+            }, (response) => {
+                const lastError = chrome.runtime.lastError;
+                if (lastError) {
+                    resolve(null);
+                    return;
+                }
+                resolve(response || null);
+            });
+        });
     }
 
     function getPlatformFromScope(scope, activePlatform) {
@@ -96,12 +182,22 @@
             const timer = setTimeout(() => controller.abort(), timeoutMs);
 
             try {
-                await fetch(baseUrl + '/v1/logs/client', {
+                const bgResponse = await requestViaBackground({
+                    url: baseUrl + '/v1/logs/client',
                     method: 'POST',
                     headers: buildHeaders(token),
                     body: JSON.stringify(packet),
-                    signal: controller.signal
+                    timeoutMs
                 });
+
+                if (!bgResponse) {
+                    await fetch(baseUrl + '/v1/logs/client', {
+                        method: 'POST',
+                        headers: buildHeaders(token),
+                        body: JSON.stringify(packet),
+                        signal: controller.signal
+                    });
+                }
             } catch (_) {
                 // Keep telemetry fully non-blocking.
             } finally {
@@ -126,23 +222,50 @@
     }
 
     function installGlobalHandlers(scope) {
+        const finalScope = scope || 'global';
+        if (installedHandlerScopes.has(finalScope)) {
+            return;
+        }
+        installedHandlerScopes.add(finalScope);
+
         window.addEventListener('error', (event) => {
+            const errMessage = getEventMessage(event && event.error) || getEventMessage(event && event.message);
+            if (isExtensionContextInvalidated(errMessage)) {
+                if (typeof event.preventDefault === 'function') {
+                    event.preventDefault();
+                }
+                recoverInvalidContext(finalScope, 'error');
+                return;
+            }
+
             push('error', {
                 message: event.message,
                 source: event.filename,
                 line: event.lineno,
                 column: event.colno,
                 stack: event.error && event.error.stack ? String(event.error.stack) : ''
-            }, scope);
+            }, finalScope);
         });
 
         window.addEventListener('unhandledrejection', (event) => {
             const reason = event.reason;
+            if (isExtensionContextInvalidated(reason)) {
+                if (typeof event.preventDefault === 'function') {
+                    event.preventDefault();
+                }
+                recoverInvalidContext(finalScope, 'unhandledrejection');
+                return;
+            }
+
             push('unhandledrejection', {
                 message: typeof reason === 'string' ? reason : (reason && reason.message ? String(reason.message) : 'unknown rejection'),
                 stack: reason && reason.stack ? String(reason.stack) : ''
-            }, scope);
+            }, finalScope);
         });
+    }
+
+    if (typeof window !== 'undefined') {
+        installGlobalHandlers('bootstrap');
     }
 
     global.ParamExtTelemetry = {
