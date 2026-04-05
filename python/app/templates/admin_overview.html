@@ -1,0 +1,49 @@
+{% extends "admin_base.html" %}
+{% block title %}Обзор{% endblock %}
+{% block content %}
+<h2>Обзор</h2>
+<section class="cards">
+    <article class="card">
+        <p>Пользователи</p>
+        <h3>{{ data.counters.users_count }}</h3>
+    </article>
+    <article class="card">
+        <p>Активные (24ч)</p>
+        <h3>{{ data.counters.active_users_24h }}</h3>
+    </article>
+    <article class="card">
+        <p>Тесты</p>
+        <h3>{{ data.counters.tests_count }}</h3>
+    </article>
+    <article class="card">
+        <p>Вопросы</p>
+        <h3>{{ data.counters.questions_count }}</h3>
+    </article>
+    <article class="card">
+        <p>Попытки</p>
+        <h3>{{ data.counters.attempts_count }}</h3>
+    </article>
+</section>
+
+<h2>Топ тестов</h2>
+<table>
+    <thead>
+        <tr>
+            <th>Путь</th>
+            <th>Хост</th>
+            <th>Вопросов</th>
+            <th>Завершений</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for t in data.top_tests %}
+        <tr>
+            <td>{{ t.path }}</td>
+            <td>{{ t.host }}</td>
+            <td>{{ t.question_count }}</td>
+            <td>{{ t.completed_count }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

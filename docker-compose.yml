@@ -40,6 +40,8 @@ services:
       API_BEARER_TOKEN: ${API_BEARER_TOKEN:-}
       API_TOKEN: ${API_TOKEN:-}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-changeme-admin-token}
+      ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-change-me-admin-secret}
+      BOT_LINK: ${BOT_LINK:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TELEGRAM_TOPIC_ID: ${TELEGRAM_TOPIC_ID:-0}

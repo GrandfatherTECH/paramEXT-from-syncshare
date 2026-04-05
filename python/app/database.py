@@ -1,4 +1,6 @@
+import hashlib
 import json
+import uuid
 from typing import Any
 
 import asyncpg
@@ -32,6 +34,17 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS users (
+                    id BIGSERIAL PRIMARY KEY,
+                    telegram_id BIGINT UNIQUE NOT NULL,
+                    telegram_username TEXT NOT NULL DEFAULT '',
+                    telegram_first_name TEXT NOT NULL DEFAULT '',
+                    api_token TEXT UNIQUE NOT NULL,
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+
                 CREATE TABLE IF NOT EXISTS openedu_tests (
                     test_key TEXT PRIMARY KEY,
                     host TEXT NOT NULL,
@@ -96,12 +109,136 @@ class Database:
                 """
             )
 
-    async def upsert_openedu_attempt(self, payload: dict[str, Any]) -> None:
+            # Schema evolution — add columns / indexes that may not exist yet.
+            for stmt in [
+                "ALTER TABLE openedu_attempts ADD COLUMN IF NOT EXISTS fingerprint TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE openedu_attempts ADD COLUMN IF NOT EXISTS user_id BIGINT DEFAULT NULL",
+                "ALTER TABLE openedu_participant_question_state ADD COLUMN IF NOT EXISTS user_id BIGINT DEFAULT NULL",
+            ]:
+                await conn.execute(stmt)
+
+            await conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_openedu_attempts_fingerprint
+                    ON openedu_attempts (fingerprint) WHERE fingerprint != ''
+                """
+            )
+
+    # ── Users ──────────────────────────────────────────────────────
+
+    async def get_user_by_token(self, token: str) -> asyncpg.Record | None:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT * FROM users WHERE api_token = $1 AND is_active = TRUE",
+                token,
+            )
+
+    async def get_user_by_telegram_id(self, telegram_id: int) -> asyncpg.Record | None:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT * FROM users WHERE telegram_id = $1",
+                telegram_id,
+            )
+
+    async def create_user(self, telegram_id: int, username: str, first_name: str) -> asyncpg.Record:
+        assert self.pool is not None
+        token = str(uuid.uuid4())
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(
+                """
+                INSERT INTO users (telegram_id, telegram_username, telegram_first_name, api_token)
+                VALUES ($1, $2, $3, $4)
+                RETURNING *
+                """,
+                telegram_id,
+                username,
+                first_name,
+                token,
+            )
+
+    async def regenerate_user_token(self, user_id: int) -> str:
+        assert self.pool is not None
+        new_token = str(uuid.uuid4())
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET api_token = $1 WHERE id = $2",
+                new_token,
+                user_id,
+            )
+        return new_token
+
+    async def touch_user_activity(self, user_id: int) -> None:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET last_active_at = NOW() WHERE id = $1",
+                user_id,
+            )
+
+    async def get_user_stats(self, telegram_id: int) -> dict[str, Any]:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            user = await conn.fetchrow(
+                "SELECT id, participant_key FROM (SELECT id, 'p_' || id::text AS participant_key FROM users WHERE telegram_id = $1) u",
+                telegram_id,
+            )
+            if not user:
+                return {'tests': 0, 'questions': 0, 'completions': 0}
+
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    COUNT(DISTINCT test_key) AS tests,
+                    COUNT(*) AS questions,
+                    COUNT(*) FILTER (WHERE is_correct) AS completions
+                FROM openedu_participant_question_state
+                WHERE user_id = $1
+                """,
+                user['id'],
+            )
+            return {
+                'tests': int(row['tests']) if row else 0,
+                'questions': int(row['questions']) if row else 0,
+                'completions': int(row['completions']) if row else 0,
+            }
+
+    # ── OpenEdu attempts ───────────────────────────────────────────
+
+    @staticmethod
+    def _compute_attempt_fingerprint(context: dict, questions: list) -> str:
+        blob = json.dumps({
+            'testKey': context.get('testKey', ''),
+            'path': context.get('path', ''),
+            'questions': [
+                {
+                    'questionKey': q.get('questionKey', ''),
+                    'isCorrect': bool(q.get('isCorrect')),
+                    'answers': sorted(
+                        [
+                            {
+                                'answerKey': a.get('answerKey', ''),
+                                'selected': bool(a.get('selected')),
+                                'correct': bool(a.get('correct')),
+                            }
+                            for a in q.get('answers', [])
+                        ],
+                        key=lambda a: a['answerKey'],
+                    ),
+                }
+                for q in questions
+            ],
+        }, sort_keys=True)
+        return hashlib.sha256(blob.encode()).hexdigest()[:32]
+
+    async def upsert_openedu_attempt(self, payload: dict[str, Any], user_id: int | None = None) -> None:
         assert self.pool is not None
         context = payload['context']
         questions = payload.get('questions', [])
         completed = bool(payload.get('completed', False))
         participant_key = str(context.get('participantKey') or '').strip() or 'anonymous'
+        fingerprint = self._compute_attempt_fingerprint(context, questions)
 
         async with self.pool.acquire() as conn:
             async with conn.transaction():
@@ -120,29 +257,29 @@ class Database:
 
                 await conn.execute(
                     """
-                    INSERT INTO openedu_attempts (test_key, completed, source)
-                    VALUES ($1, $2, $3)
+                    INSERT INTO openedu_attempts (test_key, completed, source, fingerprint, user_id)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (fingerprint) WHERE fingerprint != ''
+                    DO UPDATE SET completed = EXCLUDED.completed, user_id = COALESCE(EXCLUDED.user_id, openedu_attempts.user_id)
                     """,
                     context['testKey'],
                     completed,
                     payload.get('source', 'extension'),
+                    fingerprint,
+                    user_id,
                 )
 
                 for question in questions:
-                    # `verified` from the extension means the UI exposed correctness markers,
-                    # not that the user solved the question correctly.
                     question_key = str(question.get('questionKey') or '').strip()
                     if not question_key:
                         continue
 
                     question_correct = bool(question.get('isCorrect'))
                     answers = question.get('answers', [])
-                    selected_answers_count = sum(1 for answer in answers if bool(answer.get('selected')))
-                    explicit_correct_answers_count = sum(1 for answer in answers if bool(answer.get('correct')))
+                    selected_answers_count = sum(1 for a in answers if bool(a.get('selected')))
+                    explicit_correct_answers_count = sum(1 for a in answers if bool(a.get('correct')))
                     has_explicit_correct_answers = explicit_correct_answers_count > 0
 
-                    # Guard against a known frontend parsing edge-case where shared
-                    # question-level status marks all options as correct in single-choice blocks.
                     if has_explicit_correct_answers and selected_answers_count <= 1 and explicit_correct_answers_count > 1:
                         has_explicit_correct_answers = False
 
@@ -154,11 +291,9 @@ class Database:
                         answer_key = str(answer.get('answerKey') or '').strip()
                         if not answer_key:
                             continue
-
                         answer_text_by_key[answer_key] = str(answer.get('answerText') or '').strip()
                         if bool(answer.get('selected')):
                             selected_answer_keys.add(answer_key)
-
                         if (
                             question_correct
                             and has_explicit_correct_answers
@@ -171,9 +306,7 @@ class Database:
                         """
                         SELECT selected_answer_keys, verified_answer_keys, is_correct
                         FROM openedu_participant_question_state
-                        WHERE test_key = $1
-                          AND participant_key = $2
-                          AND question_key = $3
+                        WHERE test_key = $1 AND participant_key = $2 AND question_key = $3
                         """,
                         context['testKey'],
                         participant_key,
@@ -195,10 +328,9 @@ class Database:
                         INSERT INTO openedu_questions (test_key, question_key, prompt, completed_count, updated_at)
                         VALUES ($1, $2, $3, $4, NOW())
                         ON CONFLICT (test_key, question_key)
-                        DO UPDATE
-                        SET prompt = EXCLUDED.prompt,
-                            completed_count = GREATEST(0, openedu_questions.completed_count + $4),
-                            updated_at = NOW()
+                        DO UPDATE SET prompt = EXCLUDED.prompt,
+                                      completed_count = GREATEST(0, openedu_questions.completed_count + $4),
+                                      updated_at = NOW()
                         """,
                         context['testKey'],
                         question_key,
@@ -216,32 +348,19 @@ class Database:
                         verified_inc = 1 if answer_key in added_verified else 0
                         if selected_inc == 0 and verified_inc == 0:
                             continue
-
                         await conn.execute(
                             """
-                            INSERT INTO openedu_answer_stats (
-                                test_key,
-                                question_key,
-                                answer_key,
-                                answer_text,
-                                verified_count,
-                                fallback_count,
-                                updated_at
-                            )
+                            INSERT INTO openedu_answer_stats (test_key, question_key, answer_key, answer_text, verified_count, fallback_count, updated_at)
                             VALUES ($1, $2, $3, $4, $5, $6, NOW())
                             ON CONFLICT (test_key, question_key, answer_key)
-                            DO UPDATE
-                            SET answer_text = EXCLUDED.answer_text,
-                                verified_count = openedu_answer_stats.verified_count + EXCLUDED.verified_count,
-                                fallback_count = openedu_answer_stats.fallback_count + EXCLUDED.fallback_count,
-                                updated_at = NOW()
+                            DO UPDATE SET answer_text = EXCLUDED.answer_text,
+                                          verified_count = openedu_answer_stats.verified_count + EXCLUDED.verified_count,
+                                          fallback_count = openedu_answer_stats.fallback_count + EXCLUDED.fallback_count,
+                                          updated_at = NOW()
                             """,
-                            context['testKey'],
-                            question_key,
-                            answer_key,
+                            context['testKey'], question_key, answer_key,
                             answer_text_by_key.get(answer_key, ''),
-                            verified_inc,
-                            selected_inc,
+                            verified_inc, selected_inc,
                         )
 
                     for answer_key in (removed_selected | removed_verified):
@@ -249,64 +368,44 @@ class Database:
                         verified_dec = 1 if answer_key in removed_verified else 0
                         if selected_dec == 0 and verified_dec == 0:
                             continue
-
                         await conn.execute(
                             """
                             UPDATE openedu_answer_stats
                             SET verified_count = GREATEST(0, verified_count - $4),
                                 fallback_count = GREATEST(0, fallback_count - $5),
                                 updated_at = NOW()
-                            WHERE test_key = $1
-                              AND question_key = $2
-                              AND answer_key = $3
+                            WHERE test_key = $1 AND question_key = $2 AND answer_key = $3
                             """,
-                            context['testKey'],
-                            question_key,
-                            answer_key,
-                            verified_dec,
-                            selected_dec,
+                            context['testKey'], question_key, answer_key,
+                            verified_dec, selected_dec,
                         )
-
                         await conn.execute(
                             """
                             DELETE FROM openedu_answer_stats
-                            WHERE test_key = $1
-                              AND question_key = $2
-                              AND answer_key = $3
-                              AND verified_count = 0
-                              AND fallback_count = 0
+                            WHERE test_key = $1 AND question_key = $2 AND answer_key = $3
+                              AND verified_count = 0 AND fallback_count = 0
                             """,
-                            context['testKey'],
-                            question_key,
-                            answer_key,
+                            context['testKey'], question_key, answer_key,
                         )
 
                     await conn.execute(
                         """
-                        INSERT INTO openedu_participant_question_state (
-                            test_key,
-                            participant_key,
-                            question_key,
-                            selected_answer_keys,
-                            verified_answer_keys,
-                            is_correct,
-                            updated_at
-                        )
-                        VALUES ($1, $2, $3, $4::text[], $5::text[], $6, NOW())
+                        INSERT INTO openedu_participant_question_state
+                            (test_key, participant_key, question_key, selected_answer_keys, verified_answer_keys, is_correct, user_id, updated_at)
+                        VALUES ($1, $2, $3, $4::text[], $5::text[], $6, $7, NOW())
                         ON CONFLICT (test_key, participant_key, question_key)
-                        DO UPDATE
-                        SET selected_answer_keys = EXCLUDED.selected_answer_keys,
-                            verified_answer_keys = EXCLUDED.verified_answer_keys,
-                            is_correct = EXCLUDED.is_correct,
-                            updated_at = NOW()
+                        DO UPDATE SET selected_answer_keys = EXCLUDED.selected_answer_keys,
+                                      verified_answer_keys = EXCLUDED.verified_answer_keys,
+                                      is_correct = EXCLUDED.is_correct,
+                                      user_id = COALESCE(EXCLUDED.user_id, openedu_participant_question_state.user_id),
+                                      updated_at = NOW()
                         """,
-                        context['testKey'],
-                        participant_key,
-                        question_key,
-                        sorted(selected_answer_keys),
-                        sorted(verified_answer_keys),
-                        question_correct,
+                        context['testKey'], participant_key, question_key,
+                        sorted(selected_answer_keys), sorted(verified_answer_keys),
+                        question_correct, user_id,
                     )
+
+    # ── Stats query ────────────────────────────────────────────────
 
     async def query_openedu_stats(self, test_key: str, question_keys: list[str]) -> dict[str, Any]:
         assert self.pool is not None
@@ -315,107 +414,115 @@ class Database:
 
         async with self.pool.acquire() as conn:
             question_rows = await conn.fetch(
-                """
-                SELECT question_key, completed_count
-                FROM openedu_questions
-                WHERE test_key = $1
-                  AND question_key = ANY($2::text[])
-                """,
-                test_key,
-                question_keys,
+                "SELECT question_key, completed_count FROM openedu_questions WHERE test_key = $1 AND question_key = ANY($2::text[])",
+                test_key, question_keys,
             )
-
             stat_rows = await conn.fetch(
                 """
-                                SELECT question_key, answer_key, answer_text, verified_count, fallback_count
+                SELECT question_key, answer_key, answer_text, verified_count, fallback_count
                 FROM openedu_answer_stats
-                WHERE test_key = $1
-                  AND question_key = ANY($2::text[])
-                                ORDER BY question_key, fallback_count DESC, verified_count DESC
+                WHERE test_key = $1 AND question_key = ANY($2::text[])
+                ORDER BY question_key, fallback_count DESC, verified_count DESC
                 """,
-                test_key,
-                question_keys,
+                test_key, question_keys,
             )
 
         completed_map = {row['question_key']: int(row['completed_count']) for row in question_rows}
         result: dict[str, Any] = {}
-
-        for question_key in question_keys:
-            result[question_key] = {
-                'completedCount': completed_map.get(question_key, 0),
-                'verifiedAnswers': [],
-                'fallbackAnswers': [],
-            }
+        for qk in question_keys:
+            result[qk] = {'completedCount': completed_map.get(qk, 0), 'verifiedAnswers': [], 'fallbackAnswers': []}
 
         for row in stat_rows:
-            question_key = row['question_key']
-            entry = result.get(question_key)
+            entry = result.get(row['question_key'])
             if not entry:
                 continue
-
-            verified_count = int(row['verified_count'])
-            fallback_count = int(row['fallback_count'])
-            answer_key = row['answer_key']
-            answer_text = row['answer_text']
-
-            if verified_count > 0:
-                entry['verifiedAnswers'].append({'answerKey': answer_key, 'answerText': answer_text, 'count': verified_count})
-            if fallback_count > 0:
-                entry['fallbackAnswers'].append({'answerKey': answer_key, 'answerText': answer_text, 'count': fallback_count})
+            v = int(row['verified_count'])
+            f = int(row['fallback_count'])
+            if v > 0:
+                entry['verifiedAnswers'].append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': v})
+            if f > 0:
+                entry['fallbackAnswers'].append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': f})
 
         return result
 
-    async def write_log(self, kind: str, payload: dict[str, Any], system: dict[str, Any]) -> None:
-        assert self.pool is not None
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO extension_logs (kind, payload, system)
-                VALUES ($1, $2::jsonb, $3::jsonb)
-                """,
-                kind,
-                json.dumps(payload),
-                json.dumps(system),
-            )
+    # ── Logs (retired — no-op, kept for interface compat) ──────────
 
-    async def get_admin_snapshot(self) -> dict[str, Any]:
+    async def write_log(self, kind: str, payload: dict[str, Any], system: dict[str, Any]) -> None:
+        pass
+
+    # ── Admin queries ──────────────────────────────────────────────
+
+    async def get_admin_overview(self) -> dict[str, Any]:
         assert self.pool is not None
         async with self.pool.acquire() as conn:
             counters = await conn.fetchrow(
                 """
                 SELECT
+                    (SELECT COUNT(*) FROM users) AS users_count,
+                    (SELECT COUNT(*) FROM users WHERE last_active_at > NOW() - INTERVAL '24 hours') AS active_users_24h,
                     (SELECT COUNT(*) FROM openedu_tests) AS tests_count,
                     (SELECT COUNT(*) FROM openedu_questions) AS questions_count,
-                    (SELECT COUNT(*) FROM openedu_attempts) AS attempts_count,
-                    (SELECT COUNT(*) FROM extension_logs) AS logs_count
+                    (SELECT COUNT(*) FROM openedu_attempts) AS attempts_count
                 """
             )
-
             top_tests = await conn.fetch(
                 """
-                SELECT t.test_key, t.host, t.path, COALESCE(SUM(q.completed_count), 0) AS completed_count
+                SELECT t.test_key, t.host, t.path, t.title,
+                       COALESCE(SUM(q.completed_count), 0) AS completed_count,
+                       COUNT(DISTINCT q.question_key) AS question_count
                 FROM openedu_tests t
                 LEFT JOIN openedu_questions q ON q.test_key = t.test_key
-                GROUP BY t.test_key, t.host, t.path
+                GROUP BY t.test_key, t.host, t.path, t.title
                 ORDER BY completed_count DESC, t.updated_at DESC
                 LIMIT 20
                 """
             )
-
-            recent_logs = await conn.fetch(
-                """
-                SELECT kind, payload, system, created_at
-                FROM extension_logs
-                ORDER BY created_at DESC
-                LIMIT 20
-                """
-            )
-
         return {
             'counters': dict(counters or {}),
-            'top_tests': [dict(row) for row in top_tests],
-            'recent_logs': [dict(row) for row in recent_logs],
+            'top_tests': [dict(r) for r in top_tests],
         }
+
+    async def get_admin_users_page(self, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            total = await conn.fetchval("SELECT COUNT(*) FROM users")
+            rows = await conn.fetch(
+                """
+                SELECT u.id, u.telegram_id, u.telegram_username, u.telegram_first_name,
+                       u.is_active, u.created_at, u.last_active_at,
+                       COUNT(DISTINCT ps.test_key) AS tests_count,
+                       COUNT(ps.*) AS questions_count,
+                       COUNT(*) FILTER (WHERE ps.is_correct) AS completions_count
+                FROM users u
+                LEFT JOIN openedu_participant_question_state ps ON ps.user_id = u.id
+                GROUP BY u.id
+                ORDER BY u.last_active_at DESC
+                LIMIT $1 OFFSET $2
+                """,
+                limit, offset,
+            )
+        return {'total': total, 'users': [dict(r) for r in rows]}
+
+    async def get_admin_tests_page(self, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            total = await conn.fetchval("SELECT COUNT(*) FROM openedu_tests")
+            rows = await conn.fetch(
+                """
+                SELECT t.test_key, t.host, t.path, t.title, t.updated_at,
+                       COUNT(DISTINCT q.question_key) AS question_count,
+                       COALESCE(SUM(q.completed_count), 0) AS completed_count,
+                       COUNT(DISTINCT a.user_id) AS unique_users
+                FROM openedu_tests t
+                LEFT JOIN openedu_questions q ON q.test_key = t.test_key
+                LEFT JOIN openedu_attempts a ON a.test_key = t.test_key AND a.user_id IS NOT NULL
+                GROUP BY t.test_key, t.host, t.path, t.title, t.updated_at
+                ORDER BY t.updated_at DESC
+                LIMIT $1 OFFSET $2
+                """,
+                limit, offset,
+            )
+        return {'total': total, 'tests': [dict(r) for r in rows]}
 
 
 database = Database()

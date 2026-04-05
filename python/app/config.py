@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     api_bearer_token: str = Field(default='', alias='API_BEARER_TOKEN')
     api_token: str = Field(default='', alias='API_TOKEN')
     admin_token: str = Field(default='changeme-admin-token', alias='ADMIN_TOKEN')
+    admin_secret_key: str = Field(default='change-me-admin-secret', alias='ADMIN_SECRET_KEY')
+
+    bot_link: str = Field(default='', alias='BOT_LINK')
 
     telegram_bot_token: str = Field(default='', alias='TELEGRAM_BOT_TOKEN')
     telegram_chat_id: str = Field(default='', alias='TELEGRAM_CHAT_ID')

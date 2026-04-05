@@ -6,12 +6,12 @@
     const INLINE_WAND_ATTR = 'data-paramext-openedu-inline-wand';
     const INLINE_MENU_CLASS = 'paramext-openedu-inline-menu';
     const WAND_VISIBILITY_KEY = 'paramExtOpeneduWandsHidden';
-    const MAX_ANSWERS_PER_QUESTION = 5;
+    const MAX_ANSWERS_PER_QUESTION = 50;
     const RETRY_DELAYS_MS = [0, 350, 900];
-    const CYCLE_INTERVAL_MS = 18000;
-    const MIN_CYCLE_GAP_MS = 8000;
+    const CYCLE_INTERVAL_MS = 30000;
+    const MIN_CYCLE_GAP_MS = 15000;
     const AUTH_FAILURE_COOLDOWN_MS = 120000;
-    const QUERY_COOLDOWN_MS = 12000;
+    const QUERY_COOLDOWN_MS = 25000;
     const BACKEND_LOG_THROTTLE_MS = 30000;
     const CONTENT_FALLBACK_BLOCK_MS = 90000;
     const DEBUG_SYNC_STORAGE_KEY = 'paramExtOpeneduDebug';
@@ -68,6 +68,7 @@
     let contentFallbackBlockedUntil = 0;
     let contentFallbackBlockedReason = '';
     let participantKeyCache = '';
+    let lastMergedStatsByQuestion = null;
 
     let iframeQuestionsCache = [];
     let topFrameIframeQuestions = null;
@@ -680,6 +681,18 @@
         }, 350);
     }
 
+    function quickRerender() {
+        if (!lastMergedStatsByQuestion) {
+            return;
+        }
+        const questions = parseQuestions();
+        if (questions.length === 0) {
+            return;
+        }
+        iframeQuestionsCache = questions;
+        renderInlineWands(lastMergedStatsByQuestion, questions);
+    }
+
     function describeRequestError(result) {
         if (!result || result.ok) {
             return '';
@@ -873,32 +886,39 @@
 
     function isOptionMarkedCorrect(label, input) {
         const markerText = getMarkerText(label, input);
-        // Strip question-level markers to avoid false positives where the whole
-        // choicegroup gets "correct" and every option is incorrectly treated as correct.
-        const optionMarkerText = markerText.replace(/choicegroup_(in)?correct/gi, ' ');
-        if (NEGATIVE_MARK_RE.test(optionMarkerText)) {
+
+        // Check negative markers first — choicegroup_incorrect on labels, or
+        // standalone "incorrect"/"wrong" etc. in class names / attributes.
+        if (NEGATIVE_MARK_RE.test(markerText)) {
             return false;
         }
 
+        // Check aria-describedby status element.  In edX/OpenEdu all labels
+        // inside a choicegroup share the same aria-describedby pointing to a
+        // single status span (e.g. <span class="status correct">).  When the
+        // status is shared we still check it — the status reflects the
+        // question-level result which is valid for the selected option.
         const statusRef = String(label?.getAttribute?.('aria-describedby') || input?.getAttribute?.('aria-describedby') || '').trim();
         if (statusRef) {
             const ownerDocument = input?.ownerDocument || label?.ownerDocument || document;
-            const statusOwners = ownerDocument.querySelectorAll('[aria-describedby~="' + escapeSelector(statusRef) + '"]');
-            const isSharedStatus = statusOwners.length > 1;
-
-            if (!isSharedStatus) {
-                const statusNode = ownerDocument.getElementById(statusRef);
-                const statusClass = String(statusNode?.className || '').toLowerCase();
-                const statusText = normalizeText(textOf(statusNode));
-                if (statusClass.includes('incorrect') || NEGATIVE_MARK_RE.test(statusText)) {
+            const statusNode = ownerDocument.getElementById(statusRef);
+            if (statusNode) {
+                const statusClass = String(statusNode.className || '').toLowerCase();
+                const statusNodeText = normalizeText(textOf(statusNode));
+                if (statusClass.includes('incorrect') || NEGATIVE_MARK_RE.test(statusNodeText)) {
                     return false;
                 }
-                if (statusClass.includes('correct') || POSITIVE_MARK_RE.test(statusText)) {
+                if (statusClass.includes('correct') || POSITIVE_MARK_RE.test(statusNodeText)) {
+                    // For shared status: only the selected option counts as correct.
+                    if (input instanceof HTMLInputElement && !input.checked) {
+                        return false;
+                    }
                     return true;
                 }
             }
         }
 
+        // Check explicit data-correct attributes.
         const explicit = normalizeText(
             String(label?.getAttribute?.('data-correct') || '') + ' ' +
             String(input?.getAttribute?.('data-correct') || '')
@@ -910,7 +930,9 @@
             return true;
         }
 
-        if (POSITIVE_MARK_RE.test(optionMarkerText)) {
+        // Final fallback: check positive markers in class names / attributes
+        // (e.g. choicegroup_correct on the label itself).
+        if (POSITIVE_MARK_RE.test(markerText)) {
             return true;
         }
 
@@ -1201,7 +1223,7 @@
         if (questions.length === 0) {
             return false;
         }
-        return questions.every((question) => question.correct || question.hasVerifiedAnswer);
+        return questions.every((question) => question.correct);
     }
 
     async function pushAttemptSnapshot(questions) {
@@ -1357,6 +1379,9 @@
     }
 
     function highlightQuestionBlock(block) {
+        if (wandsHidden) {
+            return;
+        }
         block.classList.add('paramext-openedu-highlight');
         setTimeout(() => {
             block.classList.remove('paramext-openedu-highlight');
@@ -1493,29 +1518,43 @@
         return applyAnswersToQuestion(question, [answer], 'add');
     }
 
-    function pickAnswersForUi(stats) {
-        const verifiedAnswers = normalizeAnswerStatsList(stats?.verifiedAnswers);
-        const fallbackAnswers = normalizeAnswerStatsList(stats?.fallbackAnswers);
-        const canUseFallback = Boolean(settings?.openedu?.showFallbackStats);
+    function mergeAndSortAnswers(verifiedAnswers, fallbackAnswers) {
+        const map = new Map();
 
-        if (verifiedAnswers.length > 0) {
-            return {
-                answers: verifiedAnswers,
-                isFallback: false
-            };
-        }
+        (verifiedAnswers || []).forEach((ans) => {
+            const sig = ans.answerKey + '|' + normalizeText(ans.answerText);
+            map.set(sig, {
+                answerKey: ans.answerKey,
+                answerText: ans.answerText,
+                verifiedCount: ans.count || 0,
+                fallbackCount: 0,
+                isVerified: true
+            });
+        });
 
-        if (canUseFallback) {
-            return {
-                answers: fallbackAnswers,
-                isFallback: true
-            };
-        }
+        (fallbackAnswers || []).forEach((ans) => {
+            const sig = ans.answerKey + '|' + normalizeText(ans.answerText);
+            if (map.has(sig)) {
+                map.get(sig).fallbackCount = ans.count || 0;
+            } else {
+                map.set(sig, {
+                    answerKey: ans.answerKey,
+                    answerText: ans.answerText,
+                    verifiedCount: 0,
+                    fallbackCount: ans.count || 0,
+                    isVerified: false
+                });
+            }
+        });
 
-        return {
-            answers: [],
-            isFallback: false
-        };
+        const merged = Array.from(map.values());
+        merged.sort((a, b) => {
+            if (b.fallbackCount !== a.fallbackCount) return b.fallbackCount - a.fallbackCount;
+            if (b.verifiedCount !== a.verifiedCount) return b.verifiedCount - a.verifiedCount;
+            if (a.isVerified !== b.isVerified) return a.isVerified ? -1 : 1;
+            return a.answerText.localeCompare(b.answerText);
+        });
+        return merged;
     }
 
     function renderInlineWands(statsByQuestion, questions) {
@@ -1617,57 +1656,65 @@
             const list = document.createElement('ul');
             list.className = 'paramext-openedu-inline-stats';
 
-            function appendAnswersSection(sectionTitle, answers, isFallbackSection) {
-                if (!answers || answers.length === 0) {
-                    return;
-                }
+            const allAnswers = mergeAndSortAnswers(verifiedAnswers, fallbackAnswers);
 
+            if (allAnswers.length === 0) {
+                const empty = document.createElement('li');
+                empty.className = 'paramext-openedu-inline-empty';
+                empty.textContent = 'Нет статистики по этому вопросу.';
+                list.appendChild(empty);
+            } else {
                 const sectionHeader = document.createElement('li');
                 sectionHeader.className = 'paramext-openedu-inline-section';
-                sectionHeader.textContent = sectionTitle;
+                sectionHeader.textContent = 'Ответы';
                 list.appendChild(sectionHeader);
 
-                answers.slice(0, MAX_ANSWERS_PER_QUESTION).forEach((answer) => {
+                allAnswers.forEach((answer) => {
                     const row = document.createElement('li');
                     row.className = 'paramext-openedu-inline-row';
 
                     const answerBtn = document.createElement('button');
                     answerBtn.type = 'button';
                     answerBtn.className = 'paramext-openedu-inline-answer';
-                    answerBtn.textContent = answer.answerText;
+                    answerBtn.textContent = answer.isVerified ? (answer.answerText + ' ✓') : answer.answerText;
                     answerBtn.title = 'Вставить этот вариант';
                     answerBtn.addEventListener('click', () => {
-                        const applied = applyAnswersToQuestion(question, [answer], isMulti ? 'add' : 'add');
+                        const applied = applyAnswersToQuestion(question, [answer], 'add');
                         if (!applied) {
                             maybeLogBackendIssue('openedu_apply_failed', {
                                 questionKey: question.questionKey,
                                 answerText: answer.answerText,
-                                answerKey: answer.answerKey || '',
-                                source: isFallbackSection ? 'fallback-item' : 'verified-item'
+                                answerKey: answer.answerKey || ''
                             });
                         }
                     });
-
-                    const count = document.createElement('span');
-                    count.className = 'paramext-openedu-inline-count' + (isFallbackSection ? ' fallback' : '');
-                    count.textContent = String(answer.count || 0);
-
+                    
                     row.appendChild(answerBtn);
-                    row.appendChild(count);
+
+                    const countsContainer = document.createElement('div');
+                    countsContainer.style.display = 'flex';
+                    countsContainer.style.gap = '4px';
+                    countsContainer.style.marginLeft = '8px';
+
+                    if (answer.isVerified) {
+                        const vCount = document.createElement('span');
+                        vCount.className = 'paramext-openedu-inline-count verified';
+                        vCount.textContent = answer.verifiedCount > 0 ? answer.verifiedCount : '✓';
+                        vCount.title = answer.verifiedCount > 0
+                            ? 'Подтверждено платформой: ' + answer.verifiedCount + ' раз'
+                            : 'Ответ подтверждён платформой';
+                        countsContainer.appendChild(vCount);
+                    }
+
+                    const fCount = document.createElement('span');
+                    fCount.className = 'paramext-openedu-inline-count fallback';
+                    fCount.textContent = answer.fallbackCount;
+                    fCount.title = 'Выбирали: ' + answer.fallbackCount + ' раз';
+                    countsContainer.appendChild(fCount);
+
+                    row.appendChild(countsContainer);
                     list.appendChild(row);
                 });
-            }
-
-            appendAnswersSection('Проверенные', verifiedAnswers, false);
-            if (settings.openedu.showFallbackStats) {
-                appendAnswersSection('Выбирали', fallbackAnswers, true);
-            }
-
-            if (list.children.length === 0) {
-                const empty = document.createElement('li');
-                empty.className = 'paramext-openedu-inline-empty';
-                empty.textContent = 'Нет статистики по этому вопросу.';
-                list.appendChild(empty);
             }
 
             popover.appendChild(list);
@@ -1750,44 +1797,54 @@
 
             const verifiedAnswers = normalizeAnswerStatsList(stats.verifiedAnswers);
             const selectedAnswers = normalizeAnswerStatsList(stats.fallbackAnswers);
-            const visibleAnswers = selectedAnswers.length > 0 ? selectedAnswers : verifiedAnswers;
-            const verifiedKeySet = new Set(verifiedAnswers.map((item) => item.answerKey + '|' + normalizeText(item.answerText)));
+            const allAnswers = mergeAndSortAnswers(verifiedAnswers, selectedAnswers);
 
-            if (visibleAnswers.length === 0) {
+            if (allAnswers.length === 0) {
                 const emptyItem = document.createElement('li');
                 emptyItem.className = 'paramext-answer-item';
-                emptyItem.textContent = 'Пока нет подтвержденных ответов.';
+                emptyItem.textContent = 'Пока нет ответов.';
                 list.appendChild(emptyItem);
             }
 
-            visibleAnswers.forEach((answer) => {
+            allAnswers.forEach((answer) => {
                 const item = document.createElement('li');
                 item.className = 'paramext-answer-item';
 
                 const text = document.createElement('span');
                 text.className = 'paramext-answer-text';
-                const answerSignature = answer.answerKey + '|' + normalizeText(answer.answerText);
-                const isVerified = verifiedKeySet.has(answerSignature);
-                text.textContent = isVerified ? (answer.answerText + ' ✓') : answer.answerText;
-
-                const count = document.createElement('span');
-                const isDistribution = selectedAnswers.length > 0;
-                count.className = 'paramext-answer-count' + (isDistribution ? ' fallback' : '');
-                count.textContent = String(answer.count || 0);
-
+                text.textContent = answer.isVerified ? (answer.answerText + ' ✓') : answer.answerText;
                 item.appendChild(text);
-                item.appendChild(count);
+
+                const countsContainer = document.createElement('div');
+                countsContainer.style.display = 'flex';
+                countsContainer.style.gap = '4px';
+
+                if (answer.isVerified) {
+                    const vCount = document.createElement('span');
+                    vCount.className = 'paramext-answer-count verified';
+                    vCount.textContent = answer.verifiedCount > 0
+                        ? answer.verifiedCount + ' подтв.'
+                        : 'подтв.';
+                    countsContainer.appendChild(vCount);
+                }
+
+                const fCount = document.createElement('span');
+                fCount.className = 'paramext-answer-count fallback';
+                fCount.textContent = answer.fallbackCount + ' отв.';
+                countsContainer.appendChild(fCount);
+
+                item.appendChild(countsContainer);
                 list.appendChild(item);
             });
 
             card.appendChild(list);
 
-            const topAnswer = verifiedAnswers[0] || visibleAnswers[0] || null;
+            const topAnswer = allAnswers[0] || null;
             const controls = document.createElement('div');
             controls.className = 'paramext-question-controls';
             const applyBtn = document.createElement('button');
             applyBtn.className = 'paramext-apply-btn';
-            applyBtn.textContent = verifiedAnswers.length > 0 ? 'Применить правильный' : 'Применить популярный';
+            applyBtn.textContent = (topAnswer && topAnswer.isVerified) ? 'Применить правильный' : 'Применить популярный';
             applyBtn.disabled = !topAnswer;
             applyBtn.addEventListener('click', () => {
                 if (!topAnswer) {
@@ -1970,6 +2027,7 @@
 
                 const mergedStatsByQuestion = mergeStatsByQuestion(null, null, questions);
                 renderInlineWands(mergedStatsByQuestion, questions);
+                lastMergedStatsByQuestion = mergedStatsByQuestion;
 
                 if (isTopFrame) {
                     setStickOnline(false, 'Sync пауза: ' + reason);
@@ -2076,6 +2134,7 @@
             });
 
             renderInlineWands(mergedStatsByQuestion, questions);
+            lastMergedStatsByQuestion = mergedStatsByQuestion;
 
             let onlineState = { online: true, text: 'API доступен' };
             if (!pushResult.ok && !statsResult.ok) {
@@ -2189,6 +2248,26 @@
                 setTimeout(() => {
                     maybeClickNextOnSequencePage();
                 }, 180);
+            }
+
+            const isSubmit = actionable.matches('.submit, .submit.btn-brand, .problem button');
+            if (isSubmit) {
+                let rerenderAttempts = 0;
+                const tryRerender = () => {
+                    rerenderAttempts++;
+                    quickRerender();
+                    if (rerenderAttempts < 6) {
+                        setTimeout(tryRerender, 150);
+                    }
+                };
+                setTimeout(tryRerender, 200);
+
+                // Platform takes 1-3s to process answers and update DOM with
+                // correctness markers.  Schedule additional forced cycles to
+                // catch the update and push the completed flag promptly.
+                [1500, 3000, 5000].forEach((ms) => {
+                    setTimeout(() => scheduleCycle(true), ms);
+                });
             }
 
             setTimeout(() => {

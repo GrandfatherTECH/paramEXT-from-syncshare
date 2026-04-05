@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Вход — paramEXT</title>
+    <style>
+        body { margin: 0; font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background: #f2f6fc; color: #163a65; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .login-box { background: #fff; border: 1px solid #d0e1f7; border-radius: 12px; padding: 32px; width: 340px; }
+        .login-box h1 { font-size: 18px; margin: 0 0 6px; }
+        .login-box p { font-size: 12px; color: #6b8ab0; margin: 0 0 20px; }
+        .login-box input { width: 100%; padding: 9px 10px; border: 1px solid #d0e1f7; border-radius: 8px; font-size: 13px; margin-bottom: 12px; box-sizing: border-box; }
+        .login-box button { width: 100%; padding: 9px; border: 0; border-radius: 8px; background: #0d6edb; color: #fff; font-size: 13px; font-weight: 700; cursor: pointer; }
+        .error { color: #c0392b; font-size: 12px; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div class="login-box">
+        <h1>paramEXT</h1>
+        <p>Админ-панель</p>
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+        <form method="post" action="/admin/login">
+            <input type="password" name="token" placeholder="Токен администратора" autofocus required>
+            <button type="submit">Войти</button>
+        </form>
+    </div>
+</body>
+</html>

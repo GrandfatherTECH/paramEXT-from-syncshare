@@ -1,0 +1,45 @@
+{% extends "admin_base.html" %}
+{% block title %}Пользователи{% endblock %}
+{% block content %}
+<h2>Пользователи <span class="text-muted">({{ data.total }})</span></h2>
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Telegram</th>
+            <th>Имя</th>
+            <th>Статус</th>
+            <th>Тестов</th>
+            <th>Вопросов</th>
+            <th>Правильных</th>
+            <th>Последняя активность</th>
+            <th>Регистрация</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for u in data.users %}
+        <tr>
+            <td>{{ u.id }}</td>
+            <td>{% if u.telegram_username %}@{{ u.telegram_username }}{% else %}{{ u.telegram_id }}{% endif %}</td>
+            <td>{{ u.telegram_first_name }}</td>
+            <td>{% if u.is_active %}<span class="badge badge-green">Активен</span>{% else %}<span class="badge badge-gray">Неактивен</span>{% endif %}</td>
+            <td>{{ u.tests_count }}</td>
+            <td>{{ u.questions_count }}</td>
+            <td>{{ u.completions_count }}</td>
+            <td class="text-muted">{{ u.last_active_at.strftime('%d.%m.%Y %H:%M') if u.last_active_at else '—' }}</td>
+            <td class="text-muted">{{ u.created_at.strftime('%d.%m.%Y') if u.created_at else '—' }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+
+{% if data.total > page_size %}
+<div class="pagination">
+    {% for p in range(1, (data.total // page_size) + 2) %}
+        {% if p <= (data.total + page_size - 1) // page_size %}
+        <a href="/admin/users?page={{ p }}" class="{% if p == page %}active{% endif %}">{{ p }}</a>
+        {% endif %}
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

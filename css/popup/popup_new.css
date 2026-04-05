@@ -204,3 +204,15 @@ body {
 .hidden {
     display: none;
 }
+
+.bot-link {
+    display: inline-block;
+    margin-top: 4px;
+    font-size: 11px;
+    color: #0088cc;
+    text-decoration: none;
+}
+
+.bot-link:hover {
+    text-decoration: underline;
+}

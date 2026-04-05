@@ -45,7 +45,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         moodleTimeoutMs: 'MOODLE_API_TIMEOUT_MS',
         openeduApiBaseUrl: 'OPENEDU_API_BASE_URL',
         openeduApiToken: 'OPENEDU_API_TOKEN',
-        openeduTimeoutMs: 'OPENEDU_API_TIMEOUT_MS'
+        openeduTimeoutMs: 'OPENEDU_API_TIMEOUT_MS',
+        botLink: 'BOT_LINK'
     };
 
     let activeBackendPlatform = 'openedu';
@@ -157,6 +158,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const envApplied = applyEnvDefaultsIfNeeded(settings, envDefaults);
     if (envApplied.changed) {
         settings = await window.ParamExtSettings.saveSettings(envApplied.next);
+    }
+
+    const botLinkEl = document.getElementById('botLink');
+    const botLinkUrl = (envDefaults[ENV_KEYS.botLink] || '').trim();
+    if (botLinkEl && botLinkUrl) {
+        botLinkEl.href = botLinkUrl;
+        botLinkEl.style.display = '';
     }
 
     if (window.ParamExtTelemetry) {

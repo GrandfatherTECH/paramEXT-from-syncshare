@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Админ{% endblock %} — paramEXT</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background: #f2f6fc; color: #163a65; }
+        .nav { background: #0d6edb; color: #fff; padding: 0 24px; display: flex; align-items: center; gap: 24px; height: 48px; }
+        .nav-brand { font-weight: 700; font-size: 14px; margin-right: 16px; }
+        .nav a { color: rgba(255,255,255,0.8); text-decoration: none; font-size: 13px; font-weight: 600; }
+        .nav a:hover, .nav a.active { color: #fff; }
+        .nav-right { margin-left: auto; }
+        .shell { max-width: 1100px; margin: 0 auto; padding: 24px; }
+        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+        .card { border: 1px solid #d0e1f7; border-radius: 10px; background: #fff; padding: 14px; }
+        .card p { margin: 0; font-size: 12px; color: #4a6a91; }
+        .card h3 { margin: 6px 0 0; font-size: 22px; }
+        table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #d0e1f7; border-radius: 10px; overflow: hidden; margin-bottom: 16px; }
+        th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #e6eef8; font-size: 12px; vertical-align: top; }
+        th { background: #f1f6fd; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: #486b98; }
+        .pagination { display: flex; gap: 8px; margin-bottom: 16px; }
+        .pagination a { padding: 4px 10px; border-radius: 6px; border: 1px solid #d0e1f7; text-decoration: none; font-size: 12px; color: #163a65; background: #fff; }
+        .pagination a.active { background: #0d6edb; color: #fff; border-color: #0d6edb; }
+        .badge { display: inline-block; padding: 2px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+        .badge-green { background: #e6f7ed; color: #1a7d42; }
+        .badge-gray { background: #eef1f5; color: #5a6b80; }
+        h2 { font-size: 16px; margin: 20px 0 10px; }
+        .text-muted { color: #6b8ab0; font-size: 11px; }
+    </style>
+</head>
+<body>
+    <div class="nav">
+        <span class="nav-brand">paramEXT</span>
+        <a href="/admin" class="{% if active_page == 'overview' %}active{% endif %}">Обзор</a>
+        <a href="/admin/users" class="{% if active_page == 'users' %}active{% endif %}">Пользователи</a>
+        <a href="/admin/tests" class="{% if active_page == 'tests' %}active{% endif %}">Тесты</a>
+        <span class="nav-right"><a href="/admin/logout">Выйти</a></span>
+    </div>
+    <div class="shell">
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>
