@@ -122,6 +122,22 @@
         return next;
     }
 
+    function toLegacySettings(raw) {
+        const normalized = normalizeSettings(raw);
+        return {
+            mode: normalized.moodle.mode,
+            wandKey: normalized.moodle.wandHotkey,
+            nextBtnText: normalized.moodle.nextButtonText,
+            autoSolving: normalized.moodle.autoSolving,
+            hideWidgetByDefault: normalized.moodle.hideWidgetByDefault,
+            backend: {
+                apiBaseUrl: normalized.backend.moodle.apiBaseUrl,
+                apiToken: normalized.backend.moodle.apiToken,
+                requestTimeoutMs: normalized.backend.moodle.requestTimeoutMs
+            }
+        };
+    }
+
     function storageGet(key) {
         return new Promise((resolve, reject) => {
             chrome.storage.local.get(key, (result) => {
@@ -168,7 +184,10 @@
             }
             migrated.moodle.autoSolving = Boolean(legacy.autoSolving);
 
-            await storageSet({ [STORAGE_KEY]: migrated });
+            await storageSet({
+                [STORAGE_KEY]: migrated,
+                [LEGACY_KEY]: toLegacySettings(migrated)
+            });
             return migrated;
         } catch (_) {
             return null;
@@ -179,7 +198,9 @@
         try {
             const payload = await storageGet(STORAGE_KEY);
             if (payload[STORAGE_KEY]) {
-                return normalizeSettings(payload[STORAGE_KEY]);
+                const normalized = normalizeSettings(payload[STORAGE_KEY]);
+                await storageSet({ [LEGACY_KEY]: toLegacySettings(normalized) });
+                return normalized;
             }
 
             const migrated = await migrateFromLegacy();
@@ -187,7 +208,10 @@
                 return normalizeSettings(migrated);
             }
 
-            await storageSet({ [STORAGE_KEY]: DEFAULT_SETTINGS });
+            await storageSet({
+                [STORAGE_KEY]: DEFAULT_SETTINGS,
+                [LEGACY_KEY]: toLegacySettings(DEFAULT_SETTINGS)
+            });
             return deepClone(DEFAULT_SETTINGS);
         } catch (_) {
             return deepClone(DEFAULT_SETTINGS);
@@ -196,7 +220,36 @@
 
     async function saveSettings(settings) {
         const normalized = normalizeSettings(settings);
-        await storageSet({ [STORAGE_KEY]: normalized });
+        await storageSet({
+            [STORAGE_KEY]: normalized,
+            [LEGACY_KEY]: toLegacySettings(normalized)
+        });
+        return normalized;
+    }
+
+    async function clearBackendApiBaseUrl(platform) {
+        const selected = platform === 'moodle' ? 'moodle' : 'openedu';
+        const payload = await storageGet(STORAGE_KEY);
+        const raw = payload[STORAGE_KEY] && typeof payload[STORAGE_KEY] === 'object'
+            ? deepClone(payload[STORAGE_KEY])
+            : {};
+
+        if (raw.backend && typeof raw.backend === 'object') {
+            if (raw.backend[selected] && typeof raw.backend[selected] === 'object') {
+                delete raw.backend[selected].apiBaseUrl;
+            }
+
+            // Legacy shape fallback where backend settings were shared.
+            if (Object.prototype.hasOwnProperty.call(raw.backend, 'apiBaseUrl')) {
+                delete raw.backend.apiBaseUrl;
+            }
+        }
+
+        const normalized = normalizeSettings(raw);
+        await storageSet({
+            [STORAGE_KEY]: raw,
+            [LEGACY_KEY]: toLegacySettings(normalized)
+        });
         return normalized;
     }
 
@@ -282,6 +335,7 @@
         normalizeSettings,
         getSettings,
         saveSettings,
+        clearBackendApiBaseUrl,
         serializeHotkey,
         parseHotkey,
         hotkeyMatches,

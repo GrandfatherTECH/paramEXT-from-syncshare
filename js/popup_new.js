@@ -21,6 +21,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const backendApiToken = document.getElementById('backendApiToken');
     const backendRequestTimeoutMs = document.getElementById('backendRequestTimeoutMs');
     const backendPingBtn = document.getElementById('backendPingBtn');
+    const backendResetUrlBtn = document.getElementById('backendResetUrlBtn');
     const backendPingStatus = document.getElementById('backendPingStatus');
 
     const moodleModeRadios = document.getElementsByName('moodleMode');
@@ -344,26 +345,70 @@ document.addEventListener('DOMContentLoaded', async () => {
             headers.Authorization = 'Bearer ' + token;
         }
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 3500);
-        try {
-            const response = await fetch(baseUrl + '/healthz', {
-                method: 'GET',
-                headers,
-                signal: controller.signal
-            });
-            if (response.ok) {
-                backendPingStatus.textContent = 'Онлайн';
-                backendPingStatus.classList.add('online');
-            } else {
-                backendPingStatus.textContent = 'Ошибка ' + response.status;
-                backendPingStatus.classList.add('offline');
+        const probePaths = ['/healthz', '/health', '/v2/status'];
+        let hasHttpResponse = false;
+
+        for (const path of probePaths) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3500);
+            try {
+                const response = await fetch(baseUrl + path, {
+                    method: 'GET',
+                    headers,
+                    signal: controller.signal
+                });
+
+                hasHttpResponse = true;
+
+                if (response.status !== 404) {
+                    backendPingStatus.textContent = 'Онлайн';
+                    backendPingStatus.classList.add('online');
+                    return;
+                }
+            } catch (_) {
+                // Continue probing other known endpoints.
+            } finally {
+                clearTimeout(timeout);
             }
+        }
+
+        if (hasHttpResponse) {
+            backendPingStatus.textContent = 'Сервер доступен (эндпоинт не найден)';
+            backendPingStatus.classList.add('online');
+            return;
+        }
+
+        backendPingStatus.textContent = 'Оффлайн';
+        backendPingStatus.classList.add('offline');
+    }
+
+    async function resetBackendPathToDefault() {
+        if (!window.ParamExtSettings.clearBackendApiBaseUrl) {
+            return;
+        }
+
+        const originalButtonText = backendResetUrlBtn.textContent;
+        backendResetUrlBtn.disabled = true;
+        backendResetUrlBtn.textContent = 'Сброс...';
+
+        try {
+            settings = await window.ParamExtSettings.clearBackendApiBaseUrl(activeBackendPlatform);
+
+            const envAppliedReset = applyEnvDefaultsIfNeeded(settings, envDefaults);
+            if (envAppliedReset.changed) {
+                settings = await window.ParamExtSettings.saveSettings(envAppliedReset.next);
+            }
+
+            applyBackendPlatformFields();
+            backendPingStatus.textContent = 'Путь по умолчанию применен';
+            backendPingStatus.classList.remove('online', 'offline');
         } catch (_) {
-            backendPingStatus.textContent = 'Оффлайн';
+            backendPingStatus.textContent = 'Ошибка сброса';
+            backendPingStatus.classList.remove('online');
             backendPingStatus.classList.add('offline');
         } finally {
-            clearTimeout(timeout);
+            backendResetUrlBtn.disabled = false;
+            backendResetUrlBtn.textContent = originalButtonText;
         }
     }
 
@@ -392,6 +437,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     backendPingBtn.addEventListener('click', pingBackend);
+    backendResetUrlBtn.addEventListener('click', resetBackendPathToDefault);
 
     btnSave.addEventListener('click', async () => {
         settings = collectStateFromUi();

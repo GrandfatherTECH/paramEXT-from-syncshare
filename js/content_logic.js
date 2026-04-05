@@ -100,13 +100,43 @@
         }
     }
 
+    function hasAnsweredDataOnPage() {
+        const checkedOptions = document.querySelectorAll('input[type="radio"]:checked, input[type="checkbox"]:checked');
+        if (checkedOptions.length > 0) {
+            return true;
+        }
+
+        const hasFilledTextInput = Array.from(document.querySelectorAll('textarea, input[type="text"], input[type="number"]')).some((element) => {
+            if (!(element instanceof HTMLInputElement) && !(element instanceof HTMLTextAreaElement)) {
+                return false;
+            }
+            return element.value.trim().length > 0;
+        });
+        if (hasFilledTextInput) {
+            return true;
+        }
+
+        const hasMeaningfulSelect = Array.from(document.querySelectorAll('select')).some((element) => {
+            if (!(element instanceof HTMLSelectElement)) {
+                return false;
+            }
+            return element.selectedIndex > 0 || (element.value && element.value.trim().length > 0);
+        });
+
+        return hasMeaningfulSelect;
+    }
+
     function applySettings() {
         if (settings.mode === 'wand') {
             setWandsVisible(true);
         }
 
         if (settings.mode === 'autoSolve' && settings.autoSolving) {
-            setTimeout(clickNextButton, 3500);
+            setTimeout(() => {
+                if (hasAnsweredDataOnPage()) {
+                    clickNextButton();
+                }
+            }, 3500);
         }
     }
 
