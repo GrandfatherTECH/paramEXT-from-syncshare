@@ -9,7 +9,8 @@
     const MAX_ANSWERS_PER_QUESTION = 50;
     const RETRY_DELAYS_MS = [0, 350, 900];
     const CYCLE_INTERVAL_MS = 30000;
-    const MIN_CYCLE_GAP_MS = 15000;
+    const MIN_CYCLE_GAP_MS = 5000;
+    const MAX_CONSECUTIVE_FAILURES = 7;
     const AUTH_FAILURE_COOLDOWN_MS = 120000;
     const QUERY_COOLDOWN_MS = 25000;
     const BACKEND_LOG_THROTTLE_MS = 30000;
@@ -54,6 +55,8 @@
     let lastAutoAdvanceAt = 0;
     let cycleInFlight = false;
     let lastCycleAt = 0;
+    let consecutiveCycleFailures = 0;
+    let cyclesStopped = false;
     let panelVisible = false;
     let wandsHidden = false;
     let syncBlockedUntil = 0;
@@ -671,7 +674,7 @@
     }
 
     function scheduleCycle(force) {
-        if (scheduledCycleTimer) {
+        if (cyclesStopped || scheduledCycleTimer) {
             return;
         }
 
@@ -1968,8 +1971,12 @@
     }
 
     async function runStickCycle(force) {
+        if (cyclesStopped) {
+            return;
+        }
+
         const now = Date.now();
-        if (!force && now - lastCycleAt < MIN_CYCLE_GAP_MS) {
+        if (now - lastCycleAt < MIN_CYCLE_GAP_MS) {
             return;
         }
 
@@ -2137,11 +2144,30 @@
             lastMergedStatsByQuestion = mergedStatsByQuestion;
 
             let onlineState = { online: true, text: 'API доступен' };
-            if (!pushResult.ok && !statsResult.ok) {
+            const pushActuallyFailed = !pushResult.ok && pushResult.error !== 'not_changed';
+            const statsActuallyFailed = !statsResult.ok && statsResult.error !== 'cached';
+            const anyCallAttempted = pushActuallyFailed || statsActuallyFailed ||
+                (pushResult.ok && pushResult.error !== 'not_changed') ||
+                (statsResult.ok && statsResult.error !== 'cached');
+
+            if (pushActuallyFailed && statsActuallyFailed) {
                 const pushErr = describeRequestError(pushResult);
                 const statsErr = describeRequestError(statsResult);
                 const errText = [pushErr, statsErr].filter(Boolean).join(' / ');
                 onlineState = { online: false, text: 'API недоступен: ' + (errText || 'network') };
+            }
+
+            if (anyCallAttempted) {
+                if (!onlineState.online) {
+                    consecutiveCycleFailures += 1;
+                    if (consecutiveCycleFailures >= MAX_CONSECUTIVE_FAILURES) {
+                        cyclesStopped = true;
+                        onlineState = { online: false, text: 'Ошибка синхронизации (' + consecutiveCycleFailures + '/' + MAX_CONSECUTIVE_FAILURES + '). Обновите страницу.' };
+                        debugSync('cycle_stopped_max_failures', { consecutiveCycleFailures });
+                    }
+                } else {
+                    consecutiveCycleFailures = 0;
+                }
             }
 
             if (isTopFrame) {
@@ -2262,12 +2288,8 @@
                 };
                 setTimeout(tryRerender, 200);
 
-                // Platform takes 1-3s to process answers and update DOM with
-                // correctness markers.  Schedule additional forced cycles to
-                // catch the update and push the completed flag promptly.
-                [1500, 3000, 5000].forEach((ms) => {
-                    setTimeout(() => scheduleCycle(true), ms);
-                });
+                // Single forced cycle after platform processes the answer.
+                setTimeout(() => scheduleCycle(true), 3000);
             }
 
             setTimeout(() => {
@@ -2361,6 +2383,8 @@
             if (hasSettingsChange) {
                 settings = await window.ParamExtSettings.getSettings();
                 clearSyncBlock();
+                consecutiveCycleFailures = 0;
+                cyclesStopped = false;
                 runStickCycle(true);
             }
 
