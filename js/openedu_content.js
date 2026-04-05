@@ -799,7 +799,7 @@
             String(input?.getAttribute?.('data-state') || '')
         ];
 
-        const host = label?.closest?.('li, .choicegroup, .answer, .option, .response') || input?.closest?.('li, .choicegroup, .answer, .option, .response');
+        const host = label?.closest?.('li, .answer, .option, .response') || input?.closest?.('li, .answer, .option, .response');
         if (host) {
             pieces.push(String(host.className || ''));
             pieces.push(String(host.getAttribute('aria-label') || ''));
@@ -812,20 +812,29 @@
 
     function isOptionMarkedCorrect(label, input) {
         const markerText = getMarkerText(label, input);
-        if (NEGATIVE_MARK_RE.test(markerText)) {
+        // Strip question-level markers to avoid false positives where the whole
+        // choicegroup gets "correct" and every option is incorrectly treated as correct.
+        const optionMarkerText = markerText.replace(/choicegroup_(in)?correct/gi, ' ');
+        if (NEGATIVE_MARK_RE.test(optionMarkerText)) {
             return false;
         }
 
         const statusRef = String(label?.getAttribute?.('aria-describedby') || input?.getAttribute?.('aria-describedby') || '').trim();
         if (statusRef) {
-            const statusNode = input?.ownerDocument?.getElementById?.(statusRef) || document.getElementById(statusRef);
-            const statusClass = String(statusNode?.className || '').toLowerCase();
-            const statusText = normalizeText(textOf(statusNode));
-            if (statusClass.includes('incorrect') || NEGATIVE_MARK_RE.test(statusText)) {
-                return false;
-            }
-            if (statusClass.includes('correct') || POSITIVE_MARK_RE.test(statusText)) {
-                return true;
+            const ownerDocument = input?.ownerDocument || label?.ownerDocument || document;
+            const statusOwners = ownerDocument.querySelectorAll('[aria-describedby~="' + escapeSelector(statusRef) + '"]');
+            const isSharedStatus = statusOwners.length > 1;
+
+            if (!isSharedStatus) {
+                const statusNode = ownerDocument.getElementById(statusRef);
+                const statusClass = String(statusNode?.className || '').toLowerCase();
+                const statusText = normalizeText(textOf(statusNode));
+                if (statusClass.includes('incorrect') || NEGATIVE_MARK_RE.test(statusText)) {
+                    return false;
+                }
+                if (statusClass.includes('correct') || POSITIVE_MARK_RE.test(statusText)) {
+                    return true;
+                }
             }
         }
 
@@ -840,7 +849,7 @@
             return true;
         }
 
-        if (POSITIVE_MARK_RE.test(markerText)) {
+        if (POSITIVE_MARK_RE.test(optionMarkerText)) {
             return true;
         }
 

@@ -119,7 +119,14 @@ class Database:
                     question_verified = bool(question.get('verified'))
                     question_correct = bool(question.get('isCorrect')) or question_verified
                     answers = question.get('answers', [])
-                    has_explicit_correct_answers = any(bool(answer.get('correct')) for answer in answers)
+                    selected_answers_count = sum(1 for answer in answers if bool(answer.get('selected')))
+                    explicit_correct_answers_count = sum(1 for answer in answers if bool(answer.get('correct')))
+                    has_explicit_correct_answers = explicit_correct_answers_count > 0
+
+                    # Guard against a known frontend parsing edge-case where shared
+                    # question-level status marks all options as correct in single-choice blocks.
+                    if has_explicit_correct_answers and selected_answers_count <= 1 and explicit_correct_answers_count > 1:
+                        has_explicit_correct_answers = False
 
                     await conn.execute(
                         """
@@ -139,9 +146,9 @@ class Database:
 
                     for answer in answers:
                         answer_selected = bool(answer.get('selected'))
-                        answer_correct = bool(answer.get('correct'))
+                        answer_correct = bool(answer.get('correct')) if has_explicit_correct_answers else False
 
-                        verified_increment = 1 if question_correct and answer_correct else 0
+                        verified_increment = 1 if question_correct and has_explicit_correct_answers and answer_correct else 0
 
                         # Fallback stats are allowed only when the question itself is correct,
                         # and only when explicit correct flags are unavailable.
