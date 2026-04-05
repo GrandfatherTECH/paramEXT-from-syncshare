@@ -7,8 +7,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-paramext}
       POSTGRES_USER: ${POSTGRES_USER:-paramext}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-paramext}
-    ports:
-      - "5432:5432"
+    # ports:  # No external port publishing
+    #   - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -43,8 +43,8 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TELEGRAM_TOPIC_ID: ${TELEGRAM_TOPIC_ID:-0}
-    ports:
-      - "8000:8000"
+    # ports:  # No external port publishing
+    #   - "8000:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
       interval: 10s
