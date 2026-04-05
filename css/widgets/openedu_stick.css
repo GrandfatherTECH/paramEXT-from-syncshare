@@ -1,9 +1,34 @@
+.paramext-openedu-wand-toggle {
+    position: fixed;
+    right: 16px;
+    top: 92px;
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    border: 1px solid #c5ddff;
+    background: linear-gradient(145deg, #ffffff 0%, #edf5ff 100%);
+    color: #095bb4;
+    font-size: 16px;
+    font-weight: 800;
+    line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 8px 22px rgba(11, 76, 161, 0.2);
+    z-index: 2147483646;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.paramext-openedu-wand-toggle.active {
+    color: #ffffff;
+    border-color: #0a5cb7;
+    background: linear-gradient(145deg, #0a66cf 0%, #1986ef 100%);
+}
+
 .paramext-openedu-stick {
     position: fixed;
     right: 16px;
-    top: 90px;
-    width: 320px;
-    max-height: 72vh;
+    top: 142px;
+    width: 324px;
+    max-height: 70vh;
     z-index: 2147483646;
     border-radius: 14px;
     overflow: hidden;
@@ -69,7 +94,7 @@
 
 .paramext-stick-content {
     padding: 10px;
-    max-height: calc(72vh - 48px);
+    max-height: calc(70vh - 48px);
     overflow: auto;
 }
 
@@ -168,6 +193,29 @@
 .paramext-apply-btn[disabled] {
     opacity: 0.6;
     cursor: default;
+}
+
+.paramext-openedu-inline-wand {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    height: 26px;
+    margin-right: 8px;
+    border: 1px solid #c6ddfd;
+    border-radius: 8px;
+    background: #f4f9ff;
+    color: #0c5fb8;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1;
+    vertical-align: middle;
+    cursor: pointer;
+}
+
+.paramext-openedu-inline-wand:hover {
+    border-color: #96c1f5;
+    background: #e8f3ff;
 }
 
 .paramext-openedu-highlight {

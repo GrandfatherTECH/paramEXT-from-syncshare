@@ -1,7 +1,16 @@
 (function () {
     const HOST_RE = /(^|\.)openedu\.ru$/i;
     const STICK_ID = 'paramext-openedu-stick';
+    const WAND_TOGGLE_ID = 'paramext-openedu-wand-toggle';
+    const QUESTION_KEY_ATTR = 'data-paramext-openedu-question-key';
+    const INLINE_WAND_ATTR = 'data-paramext-openedu-inline-wand';
     const MAX_ANSWERS_PER_QUESTION = 5;
+    const RETRY_DELAYS_MS = [0, 350, 900];
+    const CYCLE_INTERVAL_MS = 7000;
+    const BACKEND_LOG_THROTTLE_MS = 30000;
+
+    const NEGATIVE_MARK_RE = /(choicegroup_incorrect|(^|[^a-zа-яё])(incorrect|wrong|false|неверн|неправильн|ошиб)([^a-zа-яё]|$))/i;
+    const POSITIVE_MARK_RE = /(choicegroup_correct|(^|[^a-zа-яё])(correct|right|true|верн|правильн)([^a-zа-яё]|$))/i;
 
     if (!HOST_RE.test(location.hostname)) {
         return;
@@ -15,24 +24,50 @@
         window.ParamExtTelemetry.installGlobalHandlers('openedu-content');
     }
 
+    const isTopFrame = window === window.top;
+
     let settings = null;
     let stickRoot = null;
     let stickBody = null;
+    let wandToggle = null;
     let statusDot = null;
     let statusText = null;
     let lastAutoAdvanceAt = 0;
+    let cycleInFlight = false;
+    let panelVisible = false;
+    let lastBackendIssueAt = 0;
+    let lastBackendIssueSignature = '';
 
     function textOf(node) {
         return (node && node.textContent ? node.textContent : '').replace(/\s+/g, ' ').trim();
     }
 
+    function normalizeText(value) {
+        return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    }
+
     function hash(input) {
         let value = 0;
-        for (let i = 0; i < input.length; i += 1) {
-            value = ((value << 5) - value) + input.charCodeAt(i);
+        const source = String(input || '');
+        for (let i = 0; i < source.length; i += 1) {
+            value = ((value << 5) - value) + source.charCodeAt(i);
             value |= 0;
         }
         return String(Math.abs(value));
+    }
+
+    function delay(ms) {
+        return new Promise((resolve) => {
+            setTimeout(resolve, ms);
+        });
+    }
+
+    function escapeSelector(value) {
+        const raw = String(value || '');
+        if (globalThis.CSS && typeof globalThis.CSS.escape === 'function') {
+            return globalThis.CSS.escape(raw);
+        }
+        return raw.replace(/([!"#$%&'()*+,./:;<=>?@[\\\]^`{|}~\s])/g, '\\$1');
     }
 
     function normalizeApiBaseUrl() {
@@ -55,9 +90,50 @@
         return headers;
     }
 
+    function maybeLogBackendIssue(kind, payload) {
+        if (!window.ParamExtTelemetry || typeof window.ParamExtTelemetry.push !== 'function') {
+            return;
+        }
+
+        const signature = kind + '|' + String(payload?.path || '') + '|' + String(payload?.status || 0) + '|' + String(payload?.error || '');
+        const now = Date.now();
+        if (signature === lastBackendIssueSignature && now - lastBackendIssueAt < BACKEND_LOG_THROTTLE_MS) {
+            return;
+        }
+
+        lastBackendIssueSignature = signature;
+        lastBackendIssueAt = now;
+        window.ParamExtTelemetry.push(kind, payload, 'openedu-content');
+    }
+
+    function errorMessageFromPayload(raw) {
+        if (!raw) {
+            return '';
+        }
+
+        if (typeof raw === 'string') {
+            return raw;
+        }
+
+        if (typeof raw.detail === 'string') {
+            return raw.detail;
+        }
+
+        if (typeof raw.message === 'string') {
+            return raw.message;
+        }
+
+        return '';
+    }
+
     async function requestViaBackground(request) {
         return await new Promise((resolve) => {
-            if (!chrome.runtime || typeof chrome.runtime.sendMessage !== 'function') {
+            try {
+                if (!chrome.runtime || typeof chrome.runtime.sendMessage !== 'function') {
+                    resolve(null);
+                    return;
+                }
+            } catch (_) {
                 resolve(null);
                 return;
             }
@@ -76,30 +152,58 @@
         });
     }
 
-    async function apiPost(path, body) {
+    async function requestJson(method, path, body, logErrors) {
         const baseUrl = normalizeApiBaseUrl();
         if (!baseUrl) {
-            return null;
+            return {
+                ok: false,
+                status: 0,
+                error: 'api_base_url_missing',
+                data: null
+            };
         }
 
         const timeoutMs = Number(settings?.backend?.openedu?.requestTimeoutMs || settings?.backend?.requestTimeoutMs || 4000);
-
-        const bgResponse = await requestViaBackground({
+        const request = {
             url: baseUrl + path,
-            method: 'POST',
-            headers: getAuthHeaders(true),
-            body: JSON.stringify(body),
+            method,
+            headers: getAuthHeaders(body !== null),
             timeoutMs
-        });
+        };
 
+        if (body !== null) {
+            request.body = JSON.stringify(body);
+        }
+
+        const bgResponse = await requestViaBackground(request);
         if (bgResponse) {
             if (!bgResponse.ok) {
-                return null;
+                const bgError = String(bgResponse.error || errorMessageFromPayload(bgResponse.json) || bgResponse.text || ('http_' + String(bgResponse.status || 0))).trim();
+                const result = {
+                    ok: false,
+                    status: Number(bgResponse.status || 0),
+                    error: bgError || 'request_failed',
+                    data: null
+                };
+
+                if (logErrors) {
+                    maybeLogBackendIssue('openedu_backend_error', {
+                        method,
+                        path,
+                        status: result.status,
+                        error: result.error,
+                        via: 'background'
+                    });
+                }
+                return result;
             }
-            if (bgResponse.json && typeof bgResponse.json === 'object') {
-                return bgResponse.json;
-            }
-            return null;
+
+            return {
+                ok: true,
+                status: Number(bgResponse.status || 200),
+                error: '',
+                data: bgResponse.json && typeof bgResponse.json === 'object' ? bgResponse.json : null
+            };
         }
 
         const controller = new AbortController();
@@ -107,67 +211,104 @@
 
         try {
             const response = await fetch(baseUrl + path, {
-                method: 'POST',
-                headers: getAuthHeaders(true),
-                body: JSON.stringify(body),
+                method,
+                headers: getAuthHeaders(body !== null),
+                body: body !== null ? JSON.stringify(body) : undefined,
                 signal: controller.signal
             });
 
-            if (!response.ok) {
-                return null;
+            let text = '';
+            try {
+                text = await response.text();
+            } catch (_) {
+                text = '';
             }
 
-            return await response.json();
-        } catch (_) {
-            return null;
+            let data = null;
+            if (text) {
+                try {
+                    data = JSON.parse(text);
+                } catch (_) {
+                    data = null;
+                }
+            }
+
+            if (!response.ok) {
+                const result = {
+                    ok: false,
+                    status: Number(response.status || 0),
+                    error: errorMessageFromPayload(data) || text || ('http_' + String(response.status || 0)),
+                    data: null
+                };
+
+                if (logErrors) {
+                    maybeLogBackendIssue('openedu_backend_error', {
+                        method,
+                        path,
+                        status: result.status,
+                        error: result.error,
+                        via: 'content'
+                    });
+                }
+                return result;
+            }
+
+            return {
+                ok: true,
+                status: Number(response.status || 200),
+                error: '',
+                data
+            };
+        } catch (error) {
+            const message = error && error.message ? String(error.message) : 'network_error';
+            const result = {
+                ok: false,
+                status: 0,
+                error: message,
+                data: null
+            };
+
+            if (logErrors) {
+                maybeLogBackendIssue('openedu_backend_error', {
+                    method,
+                    path,
+                    status: 0,
+                    error: message,
+                    via: 'content'
+                });
+            }
+
+            return result;
         } finally {
             clearTimeout(timer);
         }
     }
 
-    async function apiGet(path) {
-        const baseUrl = normalizeApiBaseUrl();
-        if (!baseUrl) {
-            return null;
+    async function postWithRetry(path, body, retries) {
+        let last = {
+            ok: false,
+            status: 0,
+            error: 'request_failed',
+            data: null
+        };
+
+        for (let attempt = 0; attempt <= retries; attempt += 1) {
+            if (attempt > 0) {
+                const delayMs = RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)] || 300;
+                await delay(delayMs);
+            }
+
+            last = await requestJson('POST', path, body, true);
+            if (last.ok) {
+                return last;
+            }
+
+            if (last.status >= 400 && last.status < 500 && last.status !== 429) {
+                break;
+            }
         }
 
-        const timeoutMs = Number(settings?.backend?.openedu?.requestTimeoutMs || settings?.backend?.requestTimeoutMs || 4000);
-
-        const bgResponse = await requestViaBackground({
-            url: baseUrl + path,
-            method: 'GET',
-            headers: getAuthHeaders(false),
-            timeoutMs
-        });
-
-        if (bgResponse) {
-            if (!bgResponse.ok) {
-                return null;
-            }
-            if (bgResponse.json && typeof bgResponse.json === 'object') {
-                return bgResponse.json;
-            }
-            return null;
-        }
-
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-        try {
-            const response = await fetch(baseUrl + path, {
-                method: 'GET',
-                headers: getAuthHeaders(false),
-                signal: controller.signal
-            });
-            if (!response.ok) {
-                return null;
-            }
-            return await response.json();
-        } catch (_) {
-            return null;
-        } finally {
-            clearTimeout(timer);
-        }
+        return last;
     }
 
     async function probeBackendOnline() {
@@ -176,45 +317,20 @@
             return false;
         }
 
-        const timeoutMs = Number(settings?.backend?.openedu?.requestTimeoutMs || settings?.backend?.requestTimeoutMs || 4000);
-        const headers = getAuthHeaders(false);
         const probePaths = ['/healthz', '/health', '/v2/status'];
         let hasHttpResponse = false;
 
         for (const path of probePaths) {
-            const bgResponse = await requestViaBackground({
-                url: baseUrl + path,
-                method: 'GET',
-                headers,
-                timeoutMs
-            });
-
-            if (bgResponse) {
-                hasHttpResponse = true;
-                if (bgResponse.status !== 404) {
-                    return true;
-                }
-                continue;
+            const result = await requestJson('GET', path, null, false);
+            if (result.ok) {
+                return true;
             }
 
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-            try {
-                const response = await fetch(baseUrl + path, {
-                    method: 'GET',
-                    headers,
-                    signal: controller.signal
-                });
-
+            if (result.status > 0) {
                 hasHttpResponse = true;
-                if (response.status !== 404) {
+                if (result.status !== 404) {
                     return true;
                 }
-            } catch (_) {
-                // Continue probing known health endpoints.
-            } finally {
-                clearTimeout(timer);
             }
         }
 
@@ -222,45 +338,98 @@
     }
 
     function getCourseContext() {
-        const parts = location.pathname.split('/').filter(Boolean);
+        let path = location.pathname;
+        let fullUrl = location.href;
+
+        if (document.referrer) {
+            try {
+                const ref = new URL(document.referrer);
+                if (HOST_RE.test(ref.hostname)) {
+                    path = ref.pathname;
+                    fullUrl = ref.href;
+                }
+            } catch (_) {
+                // Keep current frame URL.
+            }
+        }
+
         const titleNode = document.querySelector('h1, h2, h3');
         const title = textOf(titleNode) || document.title;
 
         return {
             host: location.host,
-            path: location.pathname,
-            fullUrl: location.href,
+            path,
+            fullUrl,
             title,
-            testKey: hash(location.host + '|' + location.pathname)
+            testKey: hash(location.host + '|' + path)
         };
+    }
+
+    function collectSameOriginDocuments(rootDoc, out, seen) {
+        if (!rootDoc || seen.has(rootDoc)) {
+            return;
+        }
+        seen.add(rootDoc);
+        out.push(rootDoc);
+
+        const frames = rootDoc.querySelectorAll('iframe, frame');
+        frames.forEach((frame) => {
+            let childDoc = null;
+            try {
+                childDoc = frame.contentDocument;
+            } catch (_) {
+                childDoc = null;
+            }
+
+            if (childDoc) {
+                collectSameOriginDocuments(childDoc, out, seen);
+            }
+        });
+    }
+
+    function getSearchDocuments() {
+        if (!isTopFrame) {
+            return [document];
+        }
+
+        const docs = [];
+        collectSameOriginDocuments(document, docs, new Set());
+        return docs;
     }
 
     function getQuestionBlocks() {
         const selectors = [
             '.problems-wrapper[data-problem-id]',
             '.xblock-student_view-problem .problems-wrapper',
+            '.xblock-student_view-problem',
+            '.problem[data-problem-id]',
+            '.problem',
             '.problems-wrapper',
             '[data-problem-id]',
-            '[id^="problem_"]'
+            '[id^="problem_"]',
+            '.question'
         ];
 
-        const seen = new Set();
+        const seen = new WeakSet();
         const result = [];
+        const docs = getSearchDocuments();
 
-        selectors.forEach((selector) => {
-            const nodes = document.querySelectorAll(selector);
-            nodes.forEach((node) => {
-                if (!(node instanceof HTMLElement) || seen.has(node)) {
-                    return;
-                }
+        docs.forEach((doc) => {
+            selectors.forEach((selector) => {
+                const nodes = doc.querySelectorAll(selector);
+                nodes.forEach((node) => {
+                    if (!(node instanceof HTMLElement) || seen.has(node)) {
+                        return;
+                    }
 
-                const hasAnswers = Boolean(node.querySelector('label[for], input[type="radio"], input[type="checkbox"]'));
-                if (!hasAnswers) {
-                    return;
-                }
+                    const hasAnswers = Boolean(node.querySelector('label[for], input[type="radio"], input[type="checkbox"]'));
+                    if (!hasAnswers) {
+                        return;
+                    }
 
-                seen.add(node);
-                result.push(node);
+                    seen.add(node);
+                    result.push(node);
+                });
             });
         });
 
@@ -268,41 +437,82 @@
     }
 
     function getQuestionPrompt(root) {
-        const labelNode = root.querySelector('.problem-header, .wrapper-problem-response p, .wrapper-problem-response h3, legend, .problem-title');
+        const labelNode = root.querySelector(
+            '.problem-header, .wrapper-problem-response p, .wrapper-problem-response h3, .problem-title, .question-title, legend'
+        );
         const prompt = textOf(labelNode);
         if (prompt) {
             return prompt;
         }
 
-        return textOf(root.querySelector('h2, h3, p'));
+        return textOf(root.querySelector('h2, h3, p, legend'));
+    }
+
+    function getMarkerText(label, input) {
+        const pieces = [
+            String(label?.className || ''),
+            String(input?.className || ''),
+            String(label?.getAttribute?.('aria-label') || ''),
+            String(input?.getAttribute?.('aria-label') || ''),
+            String(label?.getAttribute?.('data-correct') || ''),
+            String(input?.getAttribute?.('data-correct') || ''),
+            String(label?.getAttribute?.('data-state') || ''),
+            String(input?.getAttribute?.('data-state') || '')
+        ];
+
+        const host = label?.closest?.('li, .choicegroup, .answer, .option, .response') || input?.closest?.('li, .choicegroup, .answer, .option, .response');
+        if (host) {
+            pieces.push(String(host.className || ''));
+            pieces.push(String(host.getAttribute('aria-label') || ''));
+            pieces.push(String(host.getAttribute('data-state') || ''));
+            pieces.push(String(host.getAttribute('data-correct') || ''));
+        }
+
+        return pieces.join(' ').toLowerCase();
     }
 
     function isOptionMarkedCorrect(label, input) {
-        const classText = (String(label?.className || '') + ' ' + String(input?.className || '')).toLowerCase();
-        if (classText.includes('incorrect') || classText.includes('wrong')) {
+        const markerText = getMarkerText(label, input);
+        if (NEGATIVE_MARK_RE.test(markerText)) {
             return false;
         }
 
-        if (classText.includes('choicegroup_correct')) {
+        const explicit = normalizeText(
+            String(label?.getAttribute?.('data-correct') || '') + ' ' +
+            String(input?.getAttribute?.('data-correct') || '')
+        );
+        if (explicit.includes('false') || explicit.includes('0') || explicit.includes('no')) {
+            return false;
+        }
+        if (explicit.includes('true') || explicit.includes('1') || explicit.includes('yes')) {
             return true;
         }
 
-        if (/(^|[^a-z])correct([^a-z]|$)/.test(classText)) {
+        if (POSITIVE_MARK_RE.test(markerText)) {
             return true;
         }
 
-        const aria = String(label?.getAttribute?.('aria-label') || '').toLowerCase();
-        return aria.includes('correct') || aria.includes('верно');
+        return false;
+    }
+
+    function buildAnswerKey(answerText, input, fallbackIndex) {
+        const controlName = input instanceof HTMLInputElement ? input.name || '' : '';
+        const controlValue = input instanceof HTMLInputElement ? input.value || '' : '';
+        const controlId = input instanceof HTMLInputElement ? input.id || '' : '';
+        return hash(controlName + '|' + controlValue + '|' + controlId + '|' + answerText + '|' + String(fallbackIndex));
     }
 
     function getAnswerOptions(root) {
         const options = [];
-        const labels = root.querySelectorAll('label.response-label, label.field-label, .choicegroup label[for], label[for]');
+        const labels = root.querySelectorAll('label.response-label, label.field-label, .choicegroup label[for], label[for], label');
         const usedKeys = new Set();
 
         labels.forEach((label, idx) => {
             const inputId = label.getAttribute('for') || '';
-            const input = inputId ? root.querySelector('#' + CSS.escape(inputId)) : label.querySelector('input[type="radio"], input[type="checkbox"]');
+            const input = inputId
+                ? root.querySelector('#' + escapeSelector(inputId))
+                : label.querySelector('input[type="radio"], input[type="checkbox"]');
+
             const answerText = textOf(label);
             if (!answerText) {
                 return;
@@ -315,10 +525,11 @@
             usedKeys.add(dedupeKey);
 
             options.push({
-                answerKey: hash(answerText + '|' + (inputId || idx)),
+                answerKey: buildAnswerKey(answerText, input, idx),
                 answerText,
                 selected: Boolean(input && input.checked),
-                correct: isOptionMarkedCorrect(label, input)
+                correct: isOptionMarkedCorrect(label, input),
+                inputId
             });
         });
 
@@ -330,17 +541,20 @@
                 }
 
                 const inputId = input.id || '';
-                const label = inputId ? root.querySelector('label[for="' + CSS.escape(inputId) + '"]') : input.closest('label');
+                const label = inputId
+                    ? root.querySelector('label[for="' + escapeSelector(inputId) + '"]')
+                    : input.closest('label');
                 const answerText = textOf(label);
                 if (!answerText) {
                     return;
                 }
 
                 options.push({
-                    answerKey: hash(answerText + '|' + (inputId || idx)),
+                    answerKey: buildAnswerKey(answerText, input, idx),
                     answerText,
                     selected: Boolean(input.checked),
-                    correct: isOptionMarkedCorrect(label, input)
+                    correct: isOptionMarkedCorrect(label, input),
+                    inputId
                 });
             });
         }
@@ -349,8 +563,24 @@
     }
 
     function isQuestionCorrect(root) {
-        const statusNode = root.querySelector('.status.correct, .message .feedback-hint-correct, .feedback-hint-correct, [data-correct="true"]');
-        return Boolean(statusNode);
+        const exact = root.querySelector(
+            '.status.correct, .feedback-hint-correct, .message .feedback-hint-correct, .problem-status-correct, [data-correct="true"]'
+        );
+        if (exact) {
+            return true;
+        }
+
+        const statusNode = root.querySelector('.status, .message, .problem-progress, .notification, .feedback, .problem-results');
+        const statusTextRaw = normalizeText(textOf(statusNode));
+        if (!statusTextRaw) {
+            return false;
+        }
+
+        if (NEGATIVE_MARK_RE.test(statusTextRaw)) {
+            return false;
+        }
+
+        return POSITIVE_MARK_RE.test(statusTextRaw);
     }
 
     function createEmptyStatsEntry() {
@@ -361,6 +591,35 @@
         };
     }
 
+    function normalizeAnswerStatsList(items) {
+        if (!Array.isArray(items)) {
+            return [];
+        }
+
+        const normalized = [];
+        items.forEach((item) => {
+            const answerText = String(item?.answerText || '').trim();
+            if (!answerText) {
+                return;
+            }
+
+            normalized.push({
+                answerKey: typeof item?.answerKey === 'string' ? item.answerKey : '',
+                answerText,
+                count: Math.max(0, Number(item?.count || 0))
+            });
+        });
+
+        normalized.sort((a, b) => {
+            if (b.count !== a.count) {
+                return b.count - a.count;
+            }
+            return a.answerText.localeCompare(b.answerText);
+        });
+
+        return normalized.slice(0, MAX_ANSWERS_PER_QUESTION);
+    }
+
     function buildLocalFallbackStats(questions) {
         const local = {};
 
@@ -368,7 +627,11 @@
             const selected = question.options
                 .filter((option) => option.selected)
                 .slice(0, MAX_ANSWERS_PER_QUESTION)
-                .map((option) => ({ answerText: option.answerText, count: 1 }));
+                .map((option) => ({
+                    answerKey: option.answerKey,
+                    answerText: option.answerText,
+                    count: 1
+                }));
 
             if (selected.length === 0) {
                 return;
@@ -397,8 +660,8 @@
                 ? localStatsByQuestion[key]
                 : null;
 
-            const remoteVerified = Array.isArray(remote.verifiedAnswers) ? remote.verifiedAnswers.slice(0, MAX_ANSWERS_PER_QUESTION) : [];
-            const remoteFallback = Array.isArray(remote.fallbackAnswers) ? remote.fallbackAnswers.slice(0, MAX_ANSWERS_PER_QUESTION) : [];
+            const remoteVerified = normalizeAnswerStatsList(remote.verifiedAnswers);
+            const remoteFallback = normalizeAnswerStatsList(remote.fallbackAnswers);
             const hasRemoteAnswers = remoteVerified.length > 0 || remoteFallback.length > 0;
 
             if (hasRemoteAnswers || !local) {
@@ -414,7 +677,7 @@
             merged[key] = {
                 completedCount: 0,
                 verifiedAnswers: [],
-                fallbackAnswers: local.fallbackAnswers,
+                fallbackAnswers: normalizeAnswerStatsList(local.fallbackAnswers),
                 localOnly: true
             };
         });
@@ -429,15 +692,23 @@
             const prompt = getQuestionPrompt(root);
             const options = getAnswerOptions(root);
             const questionDomId = root.getAttribute('data-problem-id') || root.getAttribute('id') || ('question-' + idx);
-            const questionKey = hash(questionDomId + '|' + prompt);
+            const sourcePath = root.ownerDocument?.location?.pathname || location.pathname;
+            const questionKey = hash(sourcePath + '|' + questionDomId + '|' + prompt);
+
+            root.setAttribute(QUESTION_KEY_ATTR, questionKey);
+
+            const byStatus = isQuestionCorrect(root);
+            const byOptions = options.some((item) => item.correct);
 
             return {
                 questionKey,
                 domId: questionDomId,
+                domSelector: '[' + QUESTION_KEY_ATTR + '="' + questionKey + '"]',
+                ownerDocument: root.ownerDocument || document,
                 prompt,
-                correct: isQuestionCorrect(root),
+                correct: byStatus,
                 options,
-                hasVerifiedAnswer: options.some((item) => item.correct)
+                hasVerifiedAnswer: byStatus || byOptions
             };
         }).filter((item) => item.options.length > 0);
     }
@@ -459,67 +730,219 @@
                 questionKey: question.questionKey,
                 prompt: question.prompt,
                 verified: question.hasVerifiedAnswer,
-                answers: question.options
+                answers: question.options.map((option) => ({
+                    answerKey: option.answerKey,
+                    answerText: option.answerText,
+                    selected: option.selected,
+                    correct: option.correct
+                }))
             }))
         };
 
-        await apiPost('/v1/openedu/attempts', payload);
+        return await postWithRetry('/v1/openedu/attempts', payload, 2);
     }
 
     async function pullStatistics(questions) {
         const context = getCourseContext();
-        return await apiPost('/v1/openedu/solutions/query', {
+        return await postWithRetry('/v1/openedu/solutions/query', {
             context,
             questionKeys: questions.map((question) => question.questionKey)
-        });
+        }, 1);
     }
 
-    function applyAnswerToQuestion(question, answerText) {
-        const escaped = answerText.replace(/\s+/g, ' ').trim().toLowerCase();
-        const block = document.querySelector('[data-problem-id="' + question.domId.replace(/"/g, '\\"') + '"]') || document.getElementById(question.domId);
+    function locateQuestionBlock(question) {
+        const doc = question.ownerDocument || document;
+
+        const byKey = question.domSelector ? doc.querySelector(question.domSelector) : null;
+        if (byKey instanceof HTMLElement) {
+            return byKey;
+        }
+
+        if (question.domId) {
+            const byDataId = doc.querySelector('[data-problem-id="' + question.domId.replace(/"/g, '\\"') + '"]');
+            if (byDataId instanceof HTMLElement) {
+                return byDataId;
+            }
+
+            const byId = doc.getElementById(question.domId);
+            if (byId instanceof HTMLElement) {
+                return byId;
+            }
+        }
+
+        return null;
+    }
+
+    function findInputForOption(block, option) {
+        if (option.inputId) {
+            const direct = block.querySelector('#' + escapeSelector(option.inputId));
+            if (direct instanceof HTMLInputElement) {
+                return direct;
+            }
+        }
+
+        const expectedText = normalizeText(option.answerText);
+        if (!expectedText) {
+            return null;
+        }
+
+        const labels = block.querySelectorAll('label.response-label, label.field-label, .choicegroup label[for], label[for], label');
+        for (const label of labels) {
+            const normalized = normalizeText(textOf(label));
+            if (normalized !== expectedText) {
+                continue;
+            }
+
+            const inputId = label.getAttribute('for') || '';
+            if (inputId) {
+                const byId = block.querySelector('#' + escapeSelector(inputId));
+                if (byId instanceof HTMLInputElement) {
+                    return byId;
+                }
+            }
+
+            const nested = label.querySelector('input[type="radio"], input[type="checkbox"]');
+            if (nested instanceof HTMLInputElement) {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
+    function applyAnswerToQuestion(question, answer) {
+        const block = locateQuestionBlock(question);
         if (!block) {
             return false;
         }
 
-        const labels = block.querySelectorAll('label.response-label, label.field-label');
-        let selectedInput = null;
+        const expectedKey = String(answer?.answerKey || '').trim();
+        const expectedText = normalizeText(answer?.answerText || answer || '');
+        const options = getAnswerOptions(block);
 
-        labels.forEach((label) => {
-            if (selectedInput) {
-                return;
-            }
-            const normalized = textOf(label).toLowerCase();
-            if (normalized !== escaped) {
-                return;
-            }
-
-            const inputId = label.getAttribute('for') || '';
-            if (!inputId) {
-                return;
-            }
-            const input = block.querySelector('#' + CSS.escape(inputId));
-            if (input instanceof HTMLInputElement) {
-                selectedInput = input;
-            }
-        });
-
-        if (!selectedInput) {
+        let selectedOption = null;
+        if (expectedKey) {
+            selectedOption = options.find((option) => option.answerKey === expectedKey) || null;
+        }
+        if (!selectedOption && expectedText) {
+            selectedOption = options.find((option) => normalizeText(option.answerText) === expectedText) || null;
+        }
+        if (!selectedOption) {
             return false;
         }
 
-        selectedInput.click();
-        selectedInput.dispatchEvent(new Event('change', { bubbles: true }));
+        const input = findInputForOption(block, selectedOption);
+        if (!(input instanceof HTMLInputElement)) {
+            return false;
+        }
+
+        input.click();
+        input.dispatchEvent(new Event('change', { bubbles: true }));
         block.classList.add('paramext-openedu-highlight');
-        setTimeout(() => block.classList.remove('paramext-openedu-highlight'), 1600);
+        setTimeout(() => {
+            block.classList.remove('paramext-openedu-highlight');
+        }, 1600);
         return true;
     }
 
-    function setStickOnline(isOnline) {
-        if (!statusDot) {
+    function pickAnswersForUi(stats) {
+        const verifiedAnswers = normalizeAnswerStatsList(stats?.verifiedAnswers);
+        const fallbackAnswers = normalizeAnswerStatsList(stats?.fallbackAnswers);
+        const canUseFallback = Boolean(settings?.openedu?.showFallbackStats);
+
+        if (verifiedAnswers.length > 0) {
+            return {
+                answers: verifiedAnswers,
+                isFallback: false
+            };
+        }
+
+        if (canUseFallback) {
+            return {
+                answers: fallbackAnswers,
+                isFallback: true
+            };
+        }
+
+        return {
+            answers: [],
+            isFallback: false
+        };
+    }
+
+    function renderInlineWands(statsByQuestion, questions) {
+        const activeKeys = new Set();
+
+        questions.forEach((question) => {
+            const stats = statsByQuestion?.[question.questionKey];
+            if (!stats) {
+                return;
+            }
+
+            const block = locateQuestionBlock(question);
+            if (!block) {
+                return;
+            }
+
+            const picked = pickAnswersForUi(stats);
+            const topAnswer = picked.answers.length > 0 ? picked.answers[0] : null;
+            if (!topAnswer) {
+                return;
+            }
+
+            let button = block.querySelector('button[' + INLINE_WAND_ATTR + '="' + question.questionKey + '"]');
+            if (!(button instanceof HTMLButtonElement)) {
+                button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'paramext-openedu-inline-wand';
+                button.setAttribute(INLINE_WAND_ATTR, question.questionKey);
+
+                const anchor = block.querySelector('.problem-header, .problem-title, .question-title, legend, h3') || block;
+                if (anchor.firstChild) {
+                    anchor.insertBefore(button, anchor.firstChild);
+                } else {
+                    anchor.appendChild(button);
+                }
+            }
+
+            button.textContent = picked.isFallback ? '|*?' : '|*';
+            button.title = picked.isFallback
+                ? 'Применить наиболее вероятный ответ (резервная статистика)'
+                : 'Применить проверенный ответ';
+
+            button.onclick = () => {
+                const applied = applyAnswerToQuestion(question, topAnswer);
+                if (!applied) {
+                    maybeLogBackendIssue('openedu_apply_failed', {
+                        questionKey: question.questionKey,
+                        answerText: topAnswer.answerText,
+                        answerKey: topAnswer.answerKey || ''
+                    });
+                }
+            };
+
+            activeKeys.add(question.questionKey);
+        });
+
+        const docs = getSearchDocuments();
+        docs.forEach((doc) => {
+            const stale = doc.querySelectorAll('button[' + INLINE_WAND_ATTR + ']');
+            stale.forEach((node) => {
+                const key = node.getAttribute(INLINE_WAND_ATTR) || '';
+                if (!activeKeys.has(key)) {
+                    node.remove();
+                }
+            });
+        });
+    }
+
+    function setStickOnline(isOnline, detail) {
+        if (!statusDot || !statusText) {
             return;
         }
+
         statusDot.classList.toggle('online', isOnline);
-        statusText.textContent = isOnline ? 'API доступен' : 'API недоступен';
+        statusText.textContent = detail || (isOnline ? 'API доступен' : 'API недоступен');
     }
 
     function renderStick(statsByQuestion, questions) {
@@ -532,7 +955,7 @@
         if (!statsByQuestion || Object.keys(statsByQuestion).length === 0) {
             const emptyState = document.createElement('div');
             emptyState.className = 'paramext-stick-empty';
-            emptyState.textContent = 'Статистика появится после первого завершенного прохождения.';
+            emptyState.textContent = 'Статистика появится после первого прохождения.';
             stickBody.appendChild(emptyState);
             return;
         }
@@ -559,7 +982,7 @@
             if (completedCount > 0) {
                 meta.textContent = 'завершений: ' + completedCount;
             } else if (stats.localOnly) {
-                meta.textContent = 'ответы на странице зафиксированы';
+                meta.textContent = 'локальные ответы';
             } else {
                 meta.textContent = 'ожидание данных';
             }
@@ -571,20 +994,15 @@
             const list = document.createElement('ul');
             list.className = 'paramext-answer-list';
 
-            const verifiedAnswers = Array.isArray(stats.verifiedAnswers) ? stats.verifiedAnswers.slice(0, MAX_ANSWERS_PER_QUESTION) : [];
-            const fallbackAnswers = Array.isArray(stats.fallbackAnswers) ? stats.fallbackAnswers.slice(0, MAX_ANSWERS_PER_QUESTION) : [];
-            const canUseFallback = settings.openedu.showFallbackStats;
-            const answersToRender = verifiedAnswers.length > 0 ? verifiedAnswers : (canUseFallback ? fallbackAnswers : []);
-            const isFallback = verifiedAnswers.length === 0;
-
-            if (answersToRender.length === 0) {
+            const picked = pickAnswersForUi(stats);
+            if (picked.answers.length === 0) {
                 const emptyItem = document.createElement('li');
                 emptyItem.className = 'paramext-answer-item';
                 emptyItem.textContent = 'Пока нет подтвержденных ответов.';
                 list.appendChild(emptyItem);
             }
 
-            answersToRender.forEach((answer) => {
+            picked.answers.forEach((answer) => {
                 const item = document.createElement('li');
                 item.className = 'paramext-answer-item';
 
@@ -593,7 +1011,7 @@
                 text.textContent = answer.answerText;
 
                 const count = document.createElement('span');
-                count.className = 'paramext-answer-count' + (isFallback ? ' fallback' : '');
+                count.className = 'paramext-answer-count' + (picked.isFallback ? ' fallback' : '');
                 count.textContent = String(answer.count || 0);
 
                 item.appendChild(text);
@@ -603,18 +1021,26 @@
 
             card.appendChild(list);
 
-            const topAnswer = answersToRender.length > 0 ? answersToRender[0].answerText : '';
+            const topAnswer = picked.answers.length > 0 ? picked.answers[0] : null;
             const controls = document.createElement('div');
             controls.className = 'paramext-question-controls';
             const applyBtn = document.createElement('button');
             applyBtn.className = 'paramext-apply-btn';
-            applyBtn.textContent = isFallback ? 'Применить (резерв)' : 'Применить лучший';
+            applyBtn.textContent = picked.isFallback ? 'Применить (резерв)' : 'Применить лучший';
             applyBtn.disabled = !topAnswer;
             applyBtn.addEventListener('click', () => {
                 if (!topAnswer) {
                     return;
                 }
-                applyAnswerToQuestion(question, topAnswer);
+
+                const applied = applyAnswerToQuestion(question, topAnswer);
+                if (!applied) {
+                    maybeLogBackendIssue('openedu_apply_failed', {
+                        questionKey: question.questionKey,
+                        answerText: topAnswer.answerText,
+                        answerKey: topAnswer.answerKey || ''
+                    });
+                }
             });
             controls.appendChild(applyBtn);
             card.appendChild(controls);
@@ -623,26 +1049,53 @@
         });
     }
 
-    function toggleStick() {
-        if (!stickRoot) {
+    function toggleStick(forceState) {
+        if (!stickRoot || !wandToggle) {
             return;
         }
-        stickRoot.classList.toggle('hidden');
+
+        if (typeof forceState === 'boolean') {
+            panelVisible = forceState;
+        } else {
+            panelVisible = !panelVisible;
+        }
+
+        stickRoot.classList.toggle('hidden', !panelVisible);
+        wandToggle.classList.toggle('active', panelVisible);
     }
 
     function ensureStickUi() {
-        if (stickRoot) {
+        if (!isTopFrame) {
             return;
         }
 
-        const existing = document.getElementById(STICK_ID);
-        if (existing) {
-            existing.remove();
+        if (stickRoot && wandToggle) {
+            return;
         }
+
+        const staleStick = document.getElementById(STICK_ID);
+        if (staleStick) {
+            staleStick.remove();
+        }
+
+        const staleToggle = document.getElementById(WAND_TOGGLE_ID);
+        if (staleToggle) {
+            staleToggle.remove();
+        }
+
+        wandToggle = document.createElement('button');
+        wandToggle.id = WAND_TOGGLE_ID;
+        wandToggle.type = 'button';
+        wandToggle.className = 'paramext-openedu-wand-toggle';
+        wandToggle.textContent = '|*';
+        wandToggle.title = 'paramEXT OpenEdu: показать статистику';
+        wandToggle.addEventListener('click', () => {
+            toggleStick();
+        });
 
         stickRoot = document.createElement('aside');
         stickRoot.id = STICK_ID;
-        stickRoot.className = 'paramext-openedu-stick';
+        stickRoot.className = 'paramext-openedu-stick hidden';
 
         const header = document.createElement('div');
         header.className = 'paramext-stick-header';
@@ -653,7 +1106,7 @@
         title.textContent = 'paramEXT OpenEdu';
         const subtitle = document.createElement('div');
         subtitle.className = 'paramext-stick-subtitle';
-        subtitle.textContent = 'Проверенные ответы и статистика';
+        subtitle.textContent = 'Палочка и проверенные ответы';
         left.appendChild(title);
         left.appendChild(subtitle);
 
@@ -671,7 +1124,9 @@
         hideButton.className = 'paramext-stick-button';
         hideButton.type = 'button';
         hideButton.textContent = 'Скрыть';
-        hideButton.addEventListener('click', toggleStick);
+        hideButton.addEventListener('click', () => {
+            toggleStick(false);
+        });
 
         actions.appendChild(statusDot);
         actions.appendChild(statusText);
@@ -685,30 +1140,59 @@
 
         stickRoot.appendChild(header);
         stickRoot.appendChild(stickBody);
+
+        document.documentElement.appendChild(wandToggle);
         document.documentElement.appendChild(stickRoot);
     }
 
     async function runStickCycle() {
-        const questions = parseQuestions();
-        if (questions.length === 0) {
-            setStickOnline(await probeBackendOnline());
-            renderStick(null, []);
+        if (cycleInFlight) {
             return;
         }
 
-        await pushAttemptSnapshot(questions);
+        cycleInFlight = true;
+        try {
+            const questions = parseQuestions();
+            if (questions.length === 0) {
+                renderInlineWands({}, []);
 
-        const statsResponse = await pullStatistics(questions);
-        const statsByQuestion = statsResponse && statsResponse.statsByQuestion ? statsResponse.statsByQuestion : null;
-        const localFallbackStats = buildLocalFallbackStats(questions);
-        const mergedStatsByQuestion = mergeStatsByQuestion(statsByQuestion, localFallbackStats, questions);
+                if (isTopFrame) {
+                    const online = await probeBackendOnline();
+                    setStickOnline(online, online ? 'API доступен' : 'API недоступен');
+                    renderStick(null, []);
+                }
+                return;
+            }
 
-        if (statsResponse === null) {
-            setStickOnline(await probeBackendOnline());
-        } else {
-            setStickOnline(true);
+            const pushResult = await pushAttemptSnapshot(questions);
+            const statsResult = await pullStatistics(questions);
+
+            const statsByQuestion = statsResult.ok && statsResult.data && typeof statsResult.data === 'object'
+                ? statsResult.data.statsByQuestion || null
+                : null;
+
+            const localFallbackStats = buildLocalFallbackStats(questions);
+            const mergedStatsByQuestion = mergeStatsByQuestion(statsByQuestion, localFallbackStats, questions);
+
+            renderInlineWands(mergedStatsByQuestion, questions);
+
+            if (isTopFrame) {
+                if (pushResult.ok || statsResult.ok) {
+                    setStickOnline(true, 'API доступен');
+                } else {
+                    const probeOnline = await probeBackendOnline();
+                    if (probeOnline) {
+                        setStickOnline(true, 'API доступен, но запросы отклонены');
+                    } else {
+                        setStickOnline(false, 'API недоступен');
+                    }
+                }
+
+                renderStick(mergedStatsByQuestion, questions);
+            }
+        } finally {
+            cycleInFlight = false;
         }
-        renderStick(mergedStatsByQuestion, questions);
     }
 
     function isAutoAdvanceEnabled() {
@@ -716,6 +1200,10 @@
     }
 
     function maybeClickNextOnSequencePage() {
+        if (!isTopFrame) {
+            return;
+        }
+
         const tabsHost = document.querySelector('.sequence-navigation-tabs');
         if (!tabsHost) {
             return;
@@ -752,10 +1240,15 @@
     }
 
     function installKeyboardToggle() {
+        if (!isTopFrame) {
+            return;
+        }
+
         document.addEventListener('keydown', (event) => {
             if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
                 return;
             }
+
             if (window.ParamExtSettings.hotkeyMatches(event, settings.openedu.stickHotkey)) {
                 event.preventDefault();
                 toggleStick();
@@ -768,9 +1261,11 @@
             if (areaName !== 'local') {
                 return;
             }
+
             if (!Object.prototype.hasOwnProperty.call(changes, window.ParamExtSettings.STORAGE_KEY)) {
                 return;
             }
+
             settings = await window.ParamExtSettings.getSettings();
             runStickCycle();
         });
@@ -784,7 +1279,8 @@
                 activePlatform: settings.activePlatform,
                 mode: settings.openedu.mode,
                 autoAdvanceEnabled: settings.openedu.autoAdvanceEnabled,
-                locationHost: location.host
+                locationHost: location.host,
+                frame: isTopFrame ? 'top' : 'iframe'
             }, 'openedu-content');
         }
 
@@ -792,19 +1288,22 @@
         installKeyboardToggle();
         installStorageSync();
 
-        setStickOnline(await probeBackendOnline());
-
-        setInterval(() => {
-            runStickCycle();
-        }, 7000);
+        if (isTopFrame) {
+            setStickOnline(await probeBackendOnline());
+        }
 
         runStickCycle();
-
         setInterval(() => {
-            if (isAutoAdvanceEnabled()) {
-                maybeClickNextOnSequencePage();
-            }
-        }, 3000);
+            runStickCycle();
+        }, CYCLE_INTERVAL_MS);
+
+        if (isTopFrame) {
+            setInterval(() => {
+                if (isAutoAdvanceEnabled()) {
+                    maybeClickNextOnSequencePage();
+                }
+            }, 3000);
+        }
     }
 
     boot();

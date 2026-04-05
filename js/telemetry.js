@@ -38,6 +38,13 @@
 
     function recoverInvalidContext(scope, source) {
         try {
+            // Inside an iframe, skip reload — the top-level frame handles its own recovery.
+            // Reloading only the iframe while the outer React page stays alive causes
+            // state inconsistency and a potential double-reload cascade.
+            if (window !== window.top) {
+                return;
+            }
+
             const now = Date.now();
             const last = Number(sessionStorage.getItem(RECOVERY_FLAG_KEY) || '0');
             if (Number.isFinite(last) && now - last < 10000) {

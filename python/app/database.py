@@ -184,7 +184,7 @@ class Database:
 
             stat_rows = await conn.fetch(
                 """
-                SELECT question_key, answer_text, verified_count, fallback_count
+                                SELECT question_key, answer_key, answer_text, verified_count, fallback_count
                 FROM openedu_answer_stats
                 WHERE test_key = $1
                   AND question_key = ANY($2::text[])
@@ -212,12 +212,13 @@ class Database:
 
             verified_count = int(row['verified_count'])
             fallback_count = int(row['fallback_count'])
+            answer_key = row['answer_key']
             answer_text = row['answer_text']
 
             if verified_count > 0:
-                entry['verifiedAnswers'].append({'answerText': answer_text, 'count': verified_count})
+                entry['verifiedAnswers'].append({'answerKey': answer_key, 'answerText': answer_text, 'count': verified_count})
             if fallback_count > 0:
-                entry['fallbackAnswers'].append({'answerText': answer_text, 'count': fallback_count})
+                entry['fallbackAnswers'].append({'answerKey': answer_key, 'answerText': answer_text, 'count': fallback_count})
 
         return result
 
