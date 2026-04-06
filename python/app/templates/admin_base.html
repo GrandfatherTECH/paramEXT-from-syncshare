@@ -28,6 +28,10 @@
         .badge-gray { background: #eef1f5; color: #5a6b80; }
         h2 { font-size: 16px; margin: 20px 0 10px; }
         .text-muted { color: #6b8ab0; font-size: 11px; }
+        .search-row { display: flex; gap: 8px; margin: 10px 0 14px; }
+        .search-input { flex: 1; max-width: 540px; border: 1px solid #c8dcf7; border-radius: 8px; padding: 7px 9px; font-size: 13px; color: #163a65; }
+        .search-btn { border: 1px solid #0d6edb; border-radius: 8px; background: #0d6edb; color: #fff; padding: 7px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+        .cell-wrap { max-width: 500px; overflow-wrap: anywhere; }
     </style>
 </head>
 <body>
@@ -36,6 +40,7 @@
         <a href="/admin" class="{% if active_page == 'overview' %}active{% endif %}">Обзор</a>
         <a href="/admin/users" class="{% if active_page == 'users' %}active{% endif %}">Пользователи</a>
         <a href="/admin/tests" class="{% if active_page == 'tests' %}active{% endif %}">Тесты</a>
+        <a href="/admin/questions" class="{% if active_page == 'questions' %}active{% endif %}">Вопросы</a>
         <span class="nav-right"><a href="/admin/logout">Выйти</a></span>
     </div>
     <div class="shell">

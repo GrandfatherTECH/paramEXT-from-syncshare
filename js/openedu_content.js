@@ -1153,7 +1153,12 @@
                     verifiedAnswers: remoteVerified,
                     fallbackAnswers: remoteFallback,
                     localOnly: false,
-                    similarMatch: Boolean(remote.similarMatch)
+                    similarMatch: Boolean(remote.similarMatch),
+                    matchedBy: typeof remote.matchedBy === 'string'
+                        ? remote.matchedBy
+                        : (Boolean(remote.similarMatch) ? 'similar' : 'exact'),
+                    matchedQuestionKey: typeof remote.matchedQuestionKey === 'string' ? remote.matchedQuestionKey : '',
+                    matchedScore: Math.max(0, Number(remote.matchedScore || 0))
                 };
                 return;
             }
@@ -1163,7 +1168,10 @@
                 verifiedAnswers: [],
                 fallbackAnswers: normalizeAnswerStatsList(local.fallbackAnswers),
                 localOnly: true,
-                similarMatch: false
+                similarMatch: false,
+                matchedBy: 'local',
+                matchedQuestionKey: '',
+                matchedScore: 0
             };
         });
 
@@ -1310,7 +1318,10 @@
             questionKeys: questions.map((question) => question.questionKey),
             questions: questions.map((question) => ({
                 questionKey: question.questionKey,
-                prompt: question.prompt
+                prompt: question.prompt,
+                answers: question.options
+                    .map((option) => String(option.answerText || '').trim())
+                    .filter(Boolean)
             }))
         };
 
@@ -1662,17 +1673,63 @@
             popTitle.textContent = 'paramEXT';
             popover.appendChild(popTitle);
 
+            let actionsHost = popover;
             if (isSimilar) {
                 const similarNotice = document.createElement('div');
                 similarNotice.className = 'paramext-openedu-inline-similar-notice';
-                similarNotice.textContent = 'Статистика от похожего вопроса';
+                similarNotice.textContent = 'Точный ответ для этого вопроса не найден. Показаны данные похожего вопроса.';
                 popover.appendChild(similarNotice);
+
+                const tabs = document.createElement('div');
+                tabs.className = 'paramext-openedu-inline-tabs';
+
+                const thisQuestionTab = document.createElement('button');
+                thisQuestionTab.type = 'button';
+                thisQuestionTab.className = 'paramext-openedu-inline-tab';
+                thisQuestionTab.textContent = 'Этот вопрос';
+
+                const similarQuestionTab = document.createElement('button');
+                similarQuestionTab.type = 'button';
+                similarQuestionTab.className = 'paramext-openedu-inline-tab active';
+                similarQuestionTab.textContent = 'Похожий вопрос';
+
+                tabs.appendChild(thisQuestionTab);
+                tabs.appendChild(similarQuestionTab);
+                popover.appendChild(tabs);
+
+                const thisPane = document.createElement('div');
+                thisPane.className = 'paramext-openedu-inline-tab-pane';
+                thisPane.style.display = 'none';
+                thisPane.textContent = 'Для этого вопроса пока нет своей статистики.';
+
+                const similarPane = document.createElement('div');
+                similarPane.className = 'paramext-openedu-inline-tab-pane';
+
+                thisQuestionTab.addEventListener('click', () => {
+                    thisQuestionTab.classList.add('active');
+                    similarQuestionTab.classList.remove('active');
+                    thisPane.style.display = '';
+                    similarPane.style.display = 'none';
+                });
+
+                similarQuestionTab.addEventListener('click', () => {
+                    similarQuestionTab.classList.add('active');
+                    thisQuestionTab.classList.remove('active');
+                    similarPane.style.display = '';
+                    thisPane.style.display = 'none';
+                });
+
+                popover.appendChild(thisPane);
+                popover.appendChild(similarPane);
+                actionsHost = similarPane;
             }
 
             const applyVerified = document.createElement('button');
             applyVerified.type = 'button';
             applyVerified.className = 'paramext-openedu-inline-action';
-            applyVerified.textContent = isMulti ? 'Вставить правильные ответы' : 'Вставить правильный ответ';
+            applyVerified.textContent = isMulti
+                ? (isSimilar ? 'Вставить ответы похожего вопроса' : 'Вставить правильные ответы')
+                : (isSimilar ? 'Вставить ответ похожего вопроса' : 'Вставить правильный ответ');
             applyVerified.disabled = verifiedAnswers.length === 0;
             applyVerified.addEventListener('click', () => {
                 const payload = isMulti ? verifiedAnswers : [verifiedAnswers[0]];
@@ -1686,13 +1743,15 @@
                     });
                 }
             });
-            popover.appendChild(applyVerified);
+            actionsHost.appendChild(applyVerified);
 
             if (settings.openedu.showFallbackStats) {
                 const applyFallback = document.createElement('button');
                 applyFallback.type = 'button';
                 applyFallback.className = 'paramext-openedu-inline-action fallback';
-                applyFallback.textContent = isMulti ? 'Вставить популярные ответы' : 'Вставить популярный ответ';
+                applyFallback.textContent = isMulti
+                    ? (isSimilar ? 'Вставить популярные ответы похожего вопроса' : 'Вставить популярные ответы')
+                    : (isSimilar ? 'Вставить популярный ответ похожего вопроса' : 'Вставить популярный ответ');
                 applyFallback.disabled = fallbackAnswers.length === 0;
                 applyFallback.addEventListener('click', () => {
                     const payload = isMulti ? fallbackAnswers : [fallbackAnswers[0]];
@@ -1706,7 +1765,7 @@
                         });
                     }
                 });
-                popover.appendChild(applyFallback);
+                actionsHost.appendChild(applyFallback);
             }
 
             const list = document.createElement('ul');
@@ -1773,7 +1832,7 @@
                 });
             }
 
-            popover.appendChild(list);
+            actionsHost.appendChild(list);
 
             menu.appendChild(trigger);
             menu.appendChild(popover);
@@ -1816,9 +1875,14 @@
         const meta = document.createElement('p');
         meta.className = 'paramext-question-meta';
         const completedCount = Number(stats.completedCount || 0);
-        if (stats.similarMatch) {
-            meta.textContent = 'похожий вопрос' + (completedCount > 0 ? ' | завершений: ' + completedCount : '');
+        const matchedBy = String(stats.matchedBy || (stats.similarMatch ? 'similar' : 'exact'));
+        if (matchedBy === 'similar') {
+            const score = Math.round(Math.max(0, Number(stats.matchedScore || 0)) * 100);
+            const scoreText = score > 0 ? ' | совпадение: ' + score + '%' : '';
+            meta.textContent = 'похожий вопрос' + scoreText + (completedCount > 0 ? ' | завершений: ' + completedCount : '');
             meta.classList.add('paramext-question-meta--similar');
+        } else if (matchedBy === 'content') {
+            meta.textContent = 'этот вопрос (по содержанию)' + (completedCount > 0 ? ' | завершений: ' + completedCount : '');
         } else if (completedCount > 0) {
             meta.textContent = 'завершений: ' + completedCount;
         } else if (stats.localOnly) {
@@ -1954,12 +2018,12 @@
         const exactTab = document.createElement('button');
         exactTab.type = 'button';
         exactTab.className = 'paramext-stick-tab active';
-        exactTab.textContent = 'Ответы' + (hasExact ? ' (' + exactItems.length + ')' : '');
+        exactTab.textContent = 'Этот вопрос' + (hasExact ? ' (' + exactItems.length + ')' : '');
 
         const similarTab = document.createElement('button');
         similarTab.type = 'button';
         similarTab.className = 'paramext-stick-tab';
-        similarTab.textContent = 'Похожие (' + similarItems.length + ')';
+        similarTab.textContent = 'Похожие вопросы (' + similarItems.length + ')';
 
         tabBar.appendChild(exactTab);
         tabBar.appendChild(similarTab);
@@ -1973,7 +2037,7 @@
         } else {
             const empty = document.createElement('div');
             empty.className = 'paramext-stick-empty';
-            empty.textContent = 'Нет точных совпадений.';
+            empty.textContent = 'Для этого вопроса пока нет точной статистики.';
             exactPane.appendChild(empty);
         }
 

@@ -37,6 +37,7 @@ class OpenEduAttemptIn(BaseModel):
 class QuestionQueryItem(BaseModel):
     questionKey: str
     prompt: str = ''
+    answers: list[str] = Field(default_factory=list)
 
 
 class OpenEduSolutionsQueryIn(BaseModel):

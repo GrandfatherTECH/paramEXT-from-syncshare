@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from urllib.parse import quote_plus
 
 from .config import settings
 from .database import database
@@ -91,6 +92,28 @@ async def admin_tests(request: Request, page: int = 1, token: str | None = None)
         request=request,
         name='admin_tests.html',
         context={'data': data, 'page': max(1, page), 'page_size': PAGE_SIZE, 'active_page': 'tests'},
+    )
+
+
+# ── Questions ──────────────────────────────────────────────────────
+
+@admin_router.get('/admin/questions', response_class=HTMLResponse)
+@admin_router.get('/api/admin/questions', response_class=HTMLResponse)
+async def admin_questions(request: Request, page: int = 1, q: str = '', token: str | None = None):
+    require_admin_session(request, token=token)
+    offset = (max(1, page) - 1) * PAGE_SIZE
+    data = await database.get_admin_questions_page(search=q, limit=PAGE_SIZE, offset=offset)
+    return templates.TemplateResponse(
+        request=request,
+        name='admin_questions.html',
+        context={
+            'data': data,
+            'page': max(1, page),
+            'page_size': PAGE_SIZE,
+            'search': q,
+            'search_url': quote_plus(q),
+            'active_page': 'questions',
+        },
     )
 
 

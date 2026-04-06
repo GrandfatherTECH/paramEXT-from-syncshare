@@ -90,7 +90,11 @@ async def post_openedu_attempt(payload: OpenEduAttemptIn, user_id: int | None = 
 @app.post('/v1/openedu/solutions/query')
 @app.post('/api/v1/openedu/solutions/query')
 async def post_openedu_query(payload: OpenEduSolutionsQueryIn, user_id: int | None = Depends(require_api_token)) -> dict:
-    from .database import normalize_prompt as _norm
+    from .database import (
+        compute_question_fingerprint as _fingerprint,
+        normalize_answer_text as _norm_answer,
+        normalize_prompt as _norm,
+    )
 
     question_keys = payload.questionKeys
     if not question_keys and payload.questions:
@@ -98,18 +102,39 @@ async def post_openedu_query(payload: OpenEduSolutionsQueryIn, user_id: int | No
 
     stats = await database.query_openedu_stats(payload.context.testKey, question_keys)
 
-    # Similarity fallback for questions with no answers.
+    # Fallback chain for questions with no exact stats:
+    # 1) Content fingerprint (same prompt + same answer set).
+    # 2) Similar by prompt with answer-overlap gating.
     if payload.questions:
         missing = []
         for q in payload.questions:
             entry = stats.get(q.questionKey)
             has_answers = entry and (entry.get('verifiedAnswers') or entry.get('fallbackAnswers'))
             if not has_answers and q.prompt:
-                missing.append({'questionKey': q.questionKey, 'promptNorm': _norm(q.prompt)})
+                answer_norms_set = set()
+                for answer in (q.answers or []):
+                    answer_norm = _norm_answer(answer)
+                    if answer_norm:
+                        answer_norms_set.add(answer_norm)
+                answer_norms = sorted(answer_norms_set)
+                missing.append(
+                    {
+                        'questionKey': q.questionKey,
+                        'promptNorm': _norm(q.prompt),
+                        'answerNorms': answer_norms,
+                        'questionFingerprint': _fingerprint(q.prompt, q.answers or []),
+                    }
+                )
         if missing:
-            similar = await database.find_similar_question_stats(payload.context.testKey, missing)
-            for qk, sim_stats in similar.items():
-                stats[qk] = sim_stats
+            content_matches = await database.find_question_stats_by_fingerprint(payload.context.testKey, missing)
+            for qk, content_stats in content_matches.items():
+                stats[qk] = content_stats
+
+            remaining = [item for item in missing if item['questionKey'] not in content_matches]
+            if remaining:
+                similar = await database.find_similar_question_stats(payload.context.testKey, remaining)
+                for qk, sim_stats in similar.items():
+                    stats[qk] = sim_stats
 
     return {'statsByQuestion': stats}
 

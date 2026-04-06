@@ -308,6 +308,36 @@
     cursor: default;
 }
 
+.paramext-openedu-inline-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.paramext-openedu-inline-tab {
+    flex: 1;
+    border: 1px solid #d5e6fb;
+    border-radius: 7px;
+    background: #f6faff;
+    color: #4a6d99;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 4px 6px;
+    cursor: pointer;
+}
+
+.paramext-openedu-inline-tab.active {
+    background: #0d6edb;
+    border-color: #0b5eb9;
+    color: #ffffff;
+}
+
+.paramext-openedu-inline-tab-pane {
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: #375a87;
+}
+
 .paramext-openedu-inline-stats {
     margin: 0;
     padding: 0;

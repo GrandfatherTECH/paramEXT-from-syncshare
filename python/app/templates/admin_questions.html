@@ -1,0 +1,54 @@
+{% extends "admin_base.html" %}
+{% block title %}Вопросы{% endblock %}
+{% block content %}
+<h2>Вопросы <span class="text-muted">({{ data.total }})</span></h2>
+
+<form method="get" action="/admin/questions" class="search-row">
+    <input
+        type="text"
+        name="q"
+        value="{{ search }}"
+        class="search-input"
+        placeholder="Поиск по тексту вопроса, ключу, пути или названию теста"
+    />
+    <button type="submit" class="search-btn">Найти</button>
+</form>
+
+<table>
+    <thead>
+        <tr>
+            <th>Вопрос</th>
+            <th>Ключ вопроса</th>
+            <th>Тест</th>
+            <th>Завершений</th>
+            <th>Ответов</th>
+            <th>Обновлён</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for item in data.questions %}
+        <tr>
+            <td class="cell-wrap">{{ item.prompt or '—' }}</td>
+            <td class="text-muted">{{ item.question_key }}</td>
+            <td class="cell-wrap">
+                <div>{{ item.title or '—' }}</div>
+                <div class="text-muted">{{ item.host }}{{ item.path }}</div>
+            </td>
+            <td>{{ item.completed_count }}</td>
+            <td>{{ item.answers_count }}</td>
+            <td class="text-muted">{{ item.updated_at.strftime('%d.%m.%Y %H:%M') if item.updated_at else '—' }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+
+{% if data.total > page_size %}
+<div class="pagination">
+    {% for p in range(1, (data.total // page_size) + 2) %}
+        {% if p <= (data.total + page_size - 1) // page_size %}
+        <a href="/admin/questions?page={{ p }}{% if search %}&q={{ search_url }}{% endif %}" class="{% if p == page %}active{% endif %}">{{ p }}</a>
+        {% endif %}
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
