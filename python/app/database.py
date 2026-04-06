@@ -1,11 +1,20 @@
 import hashlib
 import json
+import re
 import uuid
 from typing import Any
 
 import asyncpg
 
 from .config import settings
+
+_NORM_PUNCT_RE = re.compile(r'[^\w\s]', re.UNICODE)
+_NORM_WS_RE = re.compile(r'\s+')
+
+
+def normalize_prompt(prompt: str) -> str:
+    text = _NORM_PUNCT_RE.sub('', prompt)
+    return _NORM_WS_RE.sub(' ', text).strip().lower()
 
 
 class Database:
@@ -114,6 +123,7 @@ class Database:
                 "ALTER TABLE openedu_attempts ADD COLUMN IF NOT EXISTS fingerprint TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE openedu_attempts ADD COLUMN IF NOT EXISTS user_id BIGINT DEFAULT NULL",
                 "ALTER TABLE openedu_participant_question_state ADD COLUMN IF NOT EXISTS user_id BIGINT DEFAULT NULL",
+                "ALTER TABLE openedu_questions ADD COLUMN IF NOT EXISTS prompt_norm TEXT NOT NULL DEFAULT ''",
             ]:
                 await conn.execute(stmt)
 
@@ -121,6 +131,20 @@ class Database:
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_openedu_attempts_fingerprint
                     ON openedu_attempts (fingerprint) WHERE fingerprint != ''
+                """
+            )
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_openedu_questions_prompt_norm
+                    ON openedu_questions (test_key, prompt_norm) WHERE prompt_norm != ''
+                """
+            )
+            # Backfill prompt_norm for existing rows.
+            await conn.execute(
+                """
+                UPDATE openedu_questions
+                SET prompt_norm = lower(regexp_replace(regexp_replace(prompt, '[^\\w\\s]', '', 'g'), '\\s+', ' ', 'g'))
+                WHERE prompt_norm = '' AND prompt != ''
                 """
             )
 
@@ -323,18 +347,23 @@ class Database:
                     elif prev_is_correct and not question_correct:
                         completed_delta = -1
 
+                    prompt_raw = question.get('prompt', '')
+                    prompt_norm = normalize_prompt(prompt_raw)
+
                     await conn.execute(
                         """
-                        INSERT INTO openedu_questions (test_key, question_key, prompt, completed_count, updated_at)
-                        VALUES ($1, $2, $3, $4, NOW())
+                        INSERT INTO openedu_questions (test_key, question_key, prompt, prompt_norm, completed_count, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, NOW())
                         ON CONFLICT (test_key, question_key)
                         DO UPDATE SET prompt = EXCLUDED.prompt,
-                                      completed_count = GREATEST(0, openedu_questions.completed_count + $4),
+                                      prompt_norm = EXCLUDED.prompt_norm,
+                                      completed_count = GREATEST(0, openedu_questions.completed_count + $5),
                                       updated_at = NOW()
                         """,
                         context['testKey'],
                         question_key,
-                        question.get('prompt', ''),
+                        prompt_raw,
+                        prompt_norm,
                         completed_delta,
                     )
 
@@ -442,6 +471,91 @@ class Database:
                 entry['verifiedAnswers'].append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': v})
             if f > 0:
                 entry['fallbackAnswers'].append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': f})
+
+        return result
+
+    # ── Similar-question fallback ────────────────────────────────────
+
+    async def find_similar_question_stats(
+        self, test_key: str, missing: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        """For questions with no exact stats, find others with the same prompt_norm."""
+        assert self.pool is not None
+        if not missing:
+            return {}
+
+        prompt_norms = [m['promptNorm'] for m in missing]
+        original_keys = [m['questionKey'] for m in missing]
+
+        async with self.pool.acquire() as conn:
+            # Find best matching question_key per (original_key, prompt_norm).
+            matched_rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (m.original_key)
+                    m.original_key,
+                    q.question_key AS matched_key,
+                    q.completed_count
+                FROM unnest($1::text[], $2::text[]) AS m(original_key, prompt_norm)
+                JOIN openedu_questions q
+                    ON q.test_key = $3
+                    AND q.prompt_norm = m.prompt_norm
+                    AND q.prompt_norm != ''
+                    AND q.question_key != m.original_key
+                ORDER BY m.original_key, q.completed_count DESC
+                """,
+                original_keys,
+                prompt_norms,
+                test_key,
+            )
+
+            if not matched_rows:
+                return {}
+
+            matched_map: dict[str, tuple[str, int]] = {}
+            matched_keys: list[str] = []
+            for row in matched_rows:
+                matched_map[row['original_key']] = (row['matched_key'], int(row['completed_count']))
+                matched_keys.append(row['matched_key'])
+
+            stat_rows = await conn.fetch(
+                """
+                SELECT question_key, answer_key, answer_text, verified_count, fallback_count
+                FROM openedu_answer_stats
+                WHERE test_key = $1 AND question_key = ANY($2::text[])
+                ORDER BY question_key, fallback_count DESC, verified_count DESC
+                """,
+                test_key,
+                matched_keys,
+            )
+
+        # Group stats by matched_key.
+        stats_by_matched: dict[str, list] = {}
+        for row in stat_rows:
+            stats_by_matched.setdefault(row['question_key'], []).append(row)
+
+        result: dict[str, Any] = {}
+        for original_key, (matched_key, completed_count) in matched_map.items():
+            rows = stats_by_matched.get(matched_key, [])
+            verified = []
+            fallback = []
+            for row in rows:
+                v = int(row['verified_count'])
+                f = int(row['fallback_count'])
+                if v > 0:
+                    verified.append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': v})
+                if f > 0:
+                    fallback.append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': f})
+
+            if not verified and not fallback:
+                continue
+
+            result[original_key] = {
+                'completedCount': completed_count,
+                'verifiedAnswers': verified,
+                'fallbackAnswers': fallback,
+                'similarMatch': True,
+                'matchedQuestionKey': matched_key,
+            }
 
         return result
 

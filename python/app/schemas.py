@@ -34,9 +34,15 @@ class OpenEduAttemptIn(BaseModel):
     questions: list[OpenEduQuestionIn] = Field(default_factory=list)
 
 
+class QuestionQueryItem(BaseModel):
+    questionKey: str
+    prompt: str = ''
+
+
 class OpenEduSolutionsQueryIn(BaseModel):
     context: ContextModel
     questionKeys: list[str] = Field(default_factory=list)
+    questions: list[QuestionQueryItem] = Field(default_factory=list)
 
 
 class LogPayloadIn(BaseModel):

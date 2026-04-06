@@ -337,6 +337,31 @@
     color: #4f76a3;
 }
 
+.paramext-openedu-inline-wand--similar {
+    border-color: #e5c76b;
+    background: #fef9ec;
+    color: #8a6d2f;
+}
+
+.paramext-openedu-inline-wand--similar:hover {
+    border-color: #d4b04e;
+    background: #fdf3dc;
+}
+
+.paramext-openedu-inline-similar-notice {
+    font-size: 10px;
+    color: #8a6d2f;
+    background: #fef9ec;
+    border: 1px dashed #e5c76b;
+    border-radius: 6px;
+    padding: 3px 6px;
+    margin-bottom: 5px;
+}
+
+.paramext-question-meta--similar {
+    color: #8a6d2f;
+}
+
 .paramext-openedu-highlight {
     outline: 2px solid #3a93ff;
     outline-offset: 2px;

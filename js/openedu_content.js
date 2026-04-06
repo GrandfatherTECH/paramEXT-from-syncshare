@@ -1152,7 +1152,8 @@
                     completedCount: Number(remote.completedCount || 0),
                     verifiedAnswers: remoteVerified,
                     fallbackAnswers: remoteFallback,
-                    localOnly: false
+                    localOnly: false,
+                    similarMatch: Boolean(remote.similarMatch)
                 };
                 return;
             }
@@ -1161,7 +1162,8 @@
                 completedCount: 0,
                 verifiedAnswers: [],
                 fallbackAnswers: normalizeAnswerStatsList(local.fallbackAnswers),
-                localOnly: true
+                localOnly: true,
+                similarMatch: false
             };
         });
 
@@ -1305,7 +1307,11 @@
         const context = getCourseContext();
         const queryPayload = {
             context,
-            questionKeys: questions.map((question) => question.questionKey)
+            questionKeys: questions.map((question) => question.questionKey),
+            questions: questions.map((question) => ({
+                questionKey: question.questionKey,
+                prompt: question.prompt
+            }))
         };
 
         debugSync('pull_statistics_payload', {
@@ -1636,10 +1642,14 @@
 
             menu.innerHTML = '';
 
+            const isSimilar = Boolean(stats.similarMatch);
+
             const trigger = document.createElement('button');
             trigger.type = 'button';
-            trigger.className = 'paramext-openedu-inline-wand';
-            trigger.textContent = verifiedAnswers.length > 0 ? '|*' : '|*?';
+            trigger.className = 'paramext-openedu-inline-wand' + (isSimilar ? ' paramext-openedu-inline-wand--similar' : '');
+            trigger.textContent = verifiedAnswers.length > 0
+                ? (isSimilar ? '|*~' : '|*')
+                : (isSimilar ? '|*?~' : '|*?');
             trigger.title = verifiedAnswers.length > 0
                 ? 'Открыть список проверенных ответов и статистики'
                 : 'Открыть статистику ответов';
@@ -1651,6 +1661,13 @@
             popTitle.className = 'paramext-openedu-inline-title';
             popTitle.textContent = 'paramEXT';
             popover.appendChild(popTitle);
+
+            if (isSimilar) {
+                const similarNotice = document.createElement('div');
+                similarNotice.className = 'paramext-openedu-inline-similar-notice';
+                similarNotice.textContent = 'Статистика от похожего вопроса';
+                popover.appendChild(similarNotice);
+            }
 
             const applyVerified = document.createElement('button');
             applyVerified.type = 'button';
@@ -1819,7 +1836,10 @@
             const meta = document.createElement('p');
             meta.className = 'paramext-question-meta';
             const completedCount = Number(stats.completedCount || 0);
-            if (completedCount > 0) {
+            if (stats.similarMatch) {
+                meta.textContent = 'похожий вопрос' + (completedCount > 0 ? ' | завершений: ' + completedCount : '');
+                meta.classList.add('paramext-question-meta--similar');
+            } else if (completedCount > 0) {
                 meta.textContent = 'завершений: ' + completedCount;
             } else if (stats.localOnly) {
                 meta.textContent = 'локальные ответы';

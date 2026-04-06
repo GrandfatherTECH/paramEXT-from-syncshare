@@ -90,7 +90,27 @@ async def post_openedu_attempt(payload: OpenEduAttemptIn, user_id: int | None = 
 @app.post('/v1/openedu/solutions/query')
 @app.post('/api/v1/openedu/solutions/query')
 async def post_openedu_query(payload: OpenEduSolutionsQueryIn, user_id: int | None = Depends(require_api_token)) -> dict:
-    stats = await database.query_openedu_stats(payload.context.testKey, payload.questionKeys)
+    from .database import normalize_prompt as _norm
+
+    question_keys = payload.questionKeys
+    if not question_keys and payload.questions:
+        question_keys = [q.questionKey for q in payload.questions]
+
+    stats = await database.query_openedu_stats(payload.context.testKey, question_keys)
+
+    # Similarity fallback for questions with no answers.
+    if payload.questions:
+        missing = []
+        for q in payload.questions:
+            entry = stats.get(q.questionKey)
+            has_answers = entry and (entry.get('verifiedAnswers') or entry.get('fallbackAnswers'))
+            if not has_answers and q.prompt:
+                missing.append({'questionKey': q.questionKey, 'promptNorm': _norm(q.prompt)})
+        if missing:
+            similar = await database.find_similar_question_stats(payload.context.testKey, missing)
+            for qk, sim_stats in similar.items():
+                stats[qk] = sim_stats
+
     return {'statsByQuestion': stats}
 
 
