@@ -1836,7 +1836,7 @@
             menu.innerHTML = '';
 
             const matchKind = String(stats.matchedBy || (stats.similarMatch ? 'similar' : 'exact'));
-            const isSimilar = matchKind === 'similar';
+            const isSimilar = matchKind === 'similar' || matchKind === 'content';
 
             const trigger = document.createElement('button');
             trigger.type = 'button';
@@ -2071,10 +2071,10 @@
         titleWrap.appendChild(title);
 
         const matchedBy = String(stats.matchedBy || (stats.similarMatch ? 'similar' : 'exact'));
-        if (matchedBy === 'similar') {
+        if (matchedBy === 'similar' || matchedBy === 'content') {
             const titleBadge = document.createElement('span');
             titleBadge.className = 'paramext-question-source-badge';
-            titleBadge.textContent = 'похожий';
+            titleBadge.textContent = matchedBy === 'content' ? 'по содержанию' : 'похожий';
             titleBadge.title = 'Статистика взята из похожего вопроса';
             titleWrap.appendChild(titleBadge);
         }
@@ -2199,7 +2199,8 @@
                 return;
             }
             const entry = { question, index, stats };
-            if (stats.similarMatch) {
+            const entryMatchedBy = String(stats.matchedBy || (stats.similarMatch ? 'similar' : 'exact'));
+            if (entryMatchedBy === 'similar' || entryMatchedBy === 'content') {
                 similarItems.push(entry);
             } else {
                 exactItems.push(entry);

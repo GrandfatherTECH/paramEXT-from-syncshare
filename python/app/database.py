@@ -442,11 +442,17 @@ class Database:
                     prev_verified_keys = set(previous_state['verified_answer_keys'] or []) if previous_state else set()
                     prev_is_correct = bool(previous_state['is_correct']) if previous_state else False
 
+                    # Verified answers are permanent: merge with previous,
+                    # never remove, never decrement.
+                    verified_answer_keys = verified_answer_keys | prev_verified_keys
+
+                    # Once marked correct, stay correct permanently.
+                    if prev_is_correct:
+                        question_correct = True
+
                     completed_delta = 0
                     if question_correct and not prev_is_correct:
                         completed_delta = 1
-                    elif prev_is_correct and not question_correct:
-                        completed_delta = -1
 
                     prompt_raw = question.get('prompt', '')
                     prompt_norm = normalize_prompt(prompt_raw)
@@ -476,8 +482,8 @@ class Database:
 
                     added_selected = selected_answer_keys - prev_selected_keys
                     removed_selected = prev_selected_keys - selected_answer_keys
+                    # Verified answers only grow — never compute removed_verified.
                     added_verified = verified_answer_keys - prev_verified_keys
-                    removed_verified = prev_verified_keys - verified_answer_keys
 
                     for answer_key in (added_selected | added_verified):
                         selected_inc = 1 if answer_key in added_selected else 0
@@ -499,22 +505,21 @@ class Database:
                             verified_inc, selected_inc,
                         )
 
-                    for answer_key in (removed_selected | removed_verified):
-                        selected_dec = 1 if answer_key in removed_selected else 0
-                        verified_dec = 1 if answer_key in removed_verified else 0
-                        if selected_dec == 0 and verified_dec == 0:
-                            continue
+                    # Only decrement fallback (selection popularity) counts.
+                    # Never touch verified_count — it is permanent.
+                    for answer_key in removed_selected:
+                        # Skip if this answer has verified status — don't
+                        # remove the stats row even if fallback reaches 0.
                         await conn.execute(
                             """
                             UPDATE openedu_answer_stats
-                            SET verified_count = GREATEST(0, verified_count - $4),
-                                fallback_count = GREATEST(0, fallback_count - $5),
+                            SET fallback_count = GREATEST(0, fallback_count - 1),
                                 updated_at = NOW()
                             WHERE test_key = $1 AND question_key = $2 AND answer_key = $3
                             """,
                             context['testKey'], question_key, answer_key,
-                            verified_dec, selected_dec,
                         )
+                        # Only delete if BOTH counts are zero (no verified, no fallback).
                         await conn.execute(
                             """
                             DELETE FROM openedu_answer_stats
