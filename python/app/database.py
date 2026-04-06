@@ -607,6 +607,7 @@ class Database:
                     ON q.test_key = $3
                     AND q.question_fingerprint = m.question_fingerprint
                     AND q.question_fingerprint != ''
+                    AND q.question_key LIKE 'q2_%'
                     AND q.question_key != m.original_key
                 ORDER BY m.original_key, q.completed_count DESC
                 """,
@@ -717,6 +718,7 @@ class Database:
                     ON q.test_key = $3
                     AND q.prompt_norm = m.prompt_norm
                     AND q.prompt_norm != ''
+                    AND q.question_key LIKE 'q2_%'
                     AND q.question_key != m.original_key
                 ORDER BY m.original_key, q.completed_count DESC
                 """,

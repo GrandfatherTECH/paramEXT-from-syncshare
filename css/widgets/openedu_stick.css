@@ -160,6 +160,25 @@
     margin: 0;
 }
 
+.paramext-question-title-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.paramext-question-source-badge {
+    display: inline-block;
+    border-radius: 999px;
+    border: 1px solid #e0bf61;
+    background: #fdf5dd;
+    color: #8a6b2a;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    white-space: nowrap;
+}
+
 .paramext-question-meta {
     color: #4f76a3;
     font-size: 11px;
@@ -253,6 +272,19 @@
     align-items: center;
     margin-right: 8px;
     vertical-align: middle;
+}
+
+.paramext-openedu-inline-source-mark {
+    margin-left: -2px;
+    margin-right: 4px;
+    border-radius: 999px;
+    border: 1px solid #e0bf61;
+    background: #fdf5dd;
+    color: #8a6b2a;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 2px 5px;
 }
 
 .paramext-openedu-inline-popover {

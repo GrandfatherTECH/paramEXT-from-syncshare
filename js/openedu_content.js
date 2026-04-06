@@ -985,6 +985,132 @@
         return hash(controlName + '|' + controlValue + '|' + controlId + '|' + answerText + '|' + String(fallbackIndex));
     }
 
+    function buildElementPath(root, element) {
+        if (!(root instanceof Element) || !(element instanceof Element)) {
+            return '';
+        }
+
+        const parts = [];
+        let current = element;
+        while (current && current !== root) {
+            const parent = current.parentElement;
+            if (!parent) {
+                break;
+            }
+            const index = Array.prototype.indexOf.call(parent.children, current);
+            parts.push(String(index));
+            current = parent;
+        }
+
+        return current === root ? parts.reverse().join('.') : '';
+    }
+
+    function getElementByPath(root, path) {
+        if (!(root instanceof Element) || !path) {
+            return root instanceof HTMLElement ? root : null;
+        }
+
+        let current = root;
+        const parts = String(path).split('.');
+        for (let i = 0; i < parts.length; i += 1) {
+            const idx = Number(parts[i]);
+            if (!Number.isInteger(idx) || idx < 0 || idx >= current.children.length) {
+                return null;
+            }
+            current = current.children[idx];
+        }
+
+        return current instanceof HTMLElement ? current : null;
+    }
+
+    function isTopQuestionWrapper(node) {
+        if (!(node instanceof Element)) {
+            return false;
+        }
+        return node.matches('[data-problem-id], .problem, .xblock-student_view-problem, .problems-wrapper, [id^="problem_"]');
+    }
+
+    function getInputGroupContainer(root, input) {
+        if (!(root instanceof HTMLElement) || !(input instanceof HTMLInputElement)) {
+            return root;
+        }
+
+        let current = input.parentElement;
+        while (current && current !== root) {
+            if (
+                !isTopQuestionWrapper(current)
+                && current.matches('fieldset, .question, .subquestion, .problem-question, .wrapper-problem-response, .choicegroup, .answers, .options, .response, .answer')
+            ) {
+                return current;
+            }
+            current = current.parentElement;
+        }
+
+        return root;
+    }
+
+    function findPromptBeforeNode(root, node) {
+        if (!(root instanceof HTMLElement) || !(node instanceof Element)) {
+            return '';
+        }
+
+        let cursor = node;
+        while (cursor && cursor !== root) {
+            let previous = cursor.previousElementSibling;
+            while (previous) {
+                const direct = textOf(previous);
+                if (direct && direct.length >= 8) {
+                    return direct;
+                }
+
+                const nested = textOf(previous.querySelector('h1, h2, h3, h4, legend, .problem-title, .question-title, .problem-header, p'));
+                if (nested && nested.length >= 8) {
+                    return nested;
+                }
+
+                previous = previous.previousElementSibling;
+            }
+            cursor = cursor.parentElement;
+        }
+
+        return '';
+    }
+
+    function resolveGroupRootByInput(root, inputPath, inputName, expectedCount) {
+        if (!(root instanceof HTMLElement)) {
+            return root;
+        }
+
+        const input = getElementByPath(root, inputPath);
+        if (!(input instanceof HTMLInputElement)) {
+            return root;
+        }
+
+        let current = input.parentElement;
+        while (current && current !== root) {
+            const allInputs = current.querySelectorAll('input[type="radio"], input[type="checkbox"]').length;
+            if (allInputs < expectedCount) {
+                current = current.parentElement;
+                continue;
+            }
+
+            if (inputName) {
+                const scopedSameName = current.querySelectorAll('input[name="' + escapeSelector(inputName) + '"]').length;
+                if (scopedSameName === expectedCount) {
+                    return current;
+                }
+            }
+
+            if (allInputs === expectedCount) {
+                return current;
+            }
+
+            current = current.parentElement;
+        }
+
+        return root;
+    }
+
     function getAnswerOptions(root) {
         const options = [];
         const labels = root.querySelectorAll('label.response-label, label.field-label, .choicegroup label[for], label[for], label');
@@ -996,12 +1122,19 @@
                 ? root.querySelector('#' + escapeSelector(inputId))
                 : label.querySelector('input[type="radio"], input[type="checkbox"]');
 
+            const groupContainer = getInputGroupContainer(root, input);
+            const groupPath = groupContainer && groupContainer !== root ? buildElementPath(root, groupContainer) : '';
+            const inputName = input instanceof HTMLInputElement ? String(input.name || '').trim() : '';
+            const groupKey = groupPath
+                ? ('c:' + groupPath)
+                : (inputName ? ('n:' + inputName) : ('i:' + String(idx)));
+
             const answerText = textOf(label);
             if (!answerText) {
                 return;
             }
 
-            const dedupeKey = inputId || answerText;
+            const dedupeKey = groupKey + '|' + (inputId || answerText);
             if (usedKeys.has(dedupeKey)) {
                 return;
             }
@@ -1012,7 +1145,11 @@
                 answerText,
                 selected: Boolean(input && input.checked),
                 correct: isOptionMarkedCorrect(label, input),
-                inputId
+                inputId,
+                inputName,
+                groupKey,
+                groupPath,
+                inputPath: input instanceof HTMLInputElement ? buildElementPath(root, input) : ''
             });
         });
 
@@ -1027,6 +1164,12 @@
                 const label = inputId
                     ? root.querySelector('label[for="' + escapeSelector(inputId) + '"]')
                     : input.closest('label');
+                const groupContainer = getInputGroupContainer(root, input);
+                const groupPath = groupContainer && groupContainer !== root ? buildElementPath(root, groupContainer) : '';
+                const inputName = String(input.name || '').trim();
+                const groupKey = groupPath
+                    ? ('c:' + groupPath)
+                    : (inputName ? ('n:' + inputName) : ('i:' + String(idx)));
                 const answerText = textOf(label);
                 if (!answerText) {
                     return;
@@ -1037,7 +1180,11 @@
                     answerText,
                     selected: Boolean(input.checked),
                     correct: isOptionMarkedCorrect(label, input),
-                    inputId
+                    inputId,
+                    inputName,
+                    groupKey,
+                    groupPath,
+                    inputPath: buildElementPath(root, input)
                 });
             });
         }
@@ -1188,7 +1335,7 @@
         return depth;
     }
 
-    function buildQuestionSignature(sourcePath, prompt, options, locationBucket) {
+    function buildQuestionSignature(sourcePath, prompt, options, locationBucket, groupIdentity) {
         const normalizedPrompt = normalizeText(prompt);
         const optionSignature = options
             .map((option) => normalizeText(option.answerText))
@@ -1196,45 +1343,80 @@
             .sort()
             .join('|');
 
-        return sourcePath + '|' + String(locationBucket) + '|' + normalizedPrompt + '|' + optionSignature;
+        return sourcePath + '|' + String(locationBucket) + '|' + String(groupIdentity || '') + '|' + normalizedPrompt + '|' + optionSignature;
     }
 
     function parseQuestions() {
         const blocks = getQuestionBlocks();
 
-        const rawQuestions = blocks.map((root, idx) => {
-            const prompt = getQuestionPrompt(root);
+        const rawQuestions = [];
+
+        blocks.forEach((root, idx) => {
             const options = getAnswerOptions(root);
-            const questionDomId = root.getAttribute('data-problem-id') || root.getAttribute('id') || ('question-' + idx);
+            if (options.length === 0) {
+                return;
+            }
+
             const sourcePath = root.ownerDocument?.location?.pathname || location.pathname;
-            const questionKey = hash(sourcePath + '|' + questionDomId + '|' + prompt);
-            const locationBucket = Math.round((root.getBoundingClientRect().top || 0) / 12);
-            const signature = buildQuestionSignature(sourcePath, prompt, options, locationBucket);
-            const nodeSize = root.querySelectorAll('*').length;
-            const nodeDepth = getNodeDepth(root);
+            const baseDomId = root.getAttribute('data-problem-id') || root.getAttribute('id') || ('question-' + idx);
+            const fallbackPrompt = getQuestionPrompt(root);
 
-            root.setAttribute(QUESTION_KEY_ATTR, questionKey);
+            const grouped = new Map();
+            options.forEach((option, optionIndex) => {
+                const key = option.groupKey || ('g:' + String(optionIndex));
+                if (!grouped.has(key)) {
+                    grouped.set(key, []);
+                }
+                grouped.get(key).push(option);
+            });
 
-            const byStatus = isQuestionCorrect(root);
-            const byOptions = options.some((item) => item.correct);
+            const groups = Array.from(grouped.entries());
+            groups.forEach(([groupId, groupOptions], groupIndex) => {
+                const first = groupOptions[0] || null;
+                let groupRoot = first?.groupPath
+                    ? (getElementByPath(root, first.groupPath) || root)
+                    : root;
+                if (groupRoot === root && groups.length > 1) {
+                    groupRoot = resolveGroupRootByInput(
+                        root,
+                        first?.inputPath || '',
+                        first?.inputName || '',
+                        groupOptions.length,
+                    );
+                }
+                const nearPrompt = findPromptBeforeNode(root, groupRoot);
+                const prompt = getQuestionPrompt(groupRoot) || nearPrompt || fallbackPrompt;
 
-            return {
-                questionKey,
-                domId: questionDomId,
-                domSelector: '[' + QUESTION_KEY_ATTR + '="' + questionKey + '"]',
-                ownerDocument: root.ownerDocument || document,
-                root,
-                prompt,
-                correct: byStatus,
-                options,
-                hasVerifiedAnswer: byStatus || byOptions,
-                signature,
-                nodeSize,
-                nodeDepth,
-                sourcePath,
-                orderIndex: idx
-            };
-        }).filter((item) => item.options.length > 0);
+                const scopedDomId = baseDomId + '::' + String(groupId || groupIndex);
+                const questionKey = 'q2_' + hash(sourcePath + '|' + scopedDomId + '|' + prompt);
+                const locationBucket = Math.round(((groupRoot.getBoundingClientRect().top || root.getBoundingClientRect().top || 0)) / 12);
+                const signature = buildQuestionSignature(sourcePath, prompt, groupOptions, locationBucket, groupId);
+                const nodeSize = groupRoot.querySelectorAll('*').length;
+                const nodeDepth = getNodeDepth(groupRoot);
+
+                groupRoot.setAttribute(QUESTION_KEY_ATTR, questionKey);
+
+                const byStatus = isQuestionCorrect(groupRoot);
+                const byOptions = groupOptions.some((item) => item.correct);
+
+                rawQuestions.push({
+                    questionKey,
+                    domId: scopedDomId,
+                    domSelector: '[' + QUESTION_KEY_ATTR + '="' + questionKey + '"]',
+                    ownerDocument: groupRoot.ownerDocument || document,
+                    root: groupRoot,
+                    prompt,
+                    correct: byStatus || byOptions,
+                    options: groupOptions,
+                    hasVerifiedAnswer: byStatus || byOptions,
+                    signature,
+                    nodeSize,
+                    nodeDepth,
+                    sourcePath,
+                    orderIndex: (idx * 100) + groupIndex
+                });
+            });
+        });
 
         const dedupedBySignature = new Map();
         rawQuestions.forEach((question) => {
@@ -1653,7 +1835,8 @@
 
             menu.innerHTML = '';
 
-            const isSimilar = Boolean(stats.similarMatch);
+            const matchKind = String(stats.matchedBy || (stats.similarMatch ? 'similar' : 'exact'));
+            const isSimilar = matchKind === 'similar';
 
             const trigger = document.createElement('button');
             trigger.type = 'button';
@@ -1664,6 +1847,10 @@
             trigger.title = verifiedAnswers.length > 0
                 ? 'Открыть список проверенных ответов и статистики'
                 : 'Открыть статистику ответов';
+
+            if (isSimilar) {
+                trigger.title = 'Статистика получена из похожего вопроса';
+            }
 
             const popover = document.createElement('div');
             popover.className = 'paramext-openedu-inline-popover';
@@ -1835,6 +2022,13 @@
             actionsHost.appendChild(list);
 
             menu.appendChild(trigger);
+            if (isSimilar) {
+                const sourceMark = document.createElement('span');
+                sourceMark.className = 'paramext-openedu-inline-source-mark';
+                sourceMark.textContent = 'похож.';
+                sourceMark.title = 'Данные не из этого вопроса, а из похожего';
+                menu.appendChild(sourceMark);
+            }
             menu.appendChild(popover);
 
             activeKeys.add(question.questionKey);
@@ -1868,14 +2062,26 @@
         const head = document.createElement('div');
         head.className = 'paramext-question-head';
 
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'paramext-question-title-wrap';
+
         const title = document.createElement('p');
         title.className = 'paramext-question-name';
         title.textContent = 'Вопрос ' + (index + 1);
+        titleWrap.appendChild(title);
+
+        const matchedBy = String(stats.matchedBy || (stats.similarMatch ? 'similar' : 'exact'));
+        if (matchedBy === 'similar') {
+            const titleBadge = document.createElement('span');
+            titleBadge.className = 'paramext-question-source-badge';
+            titleBadge.textContent = 'похожий';
+            titleBadge.title = 'Статистика взята из похожего вопроса';
+            titleWrap.appendChild(titleBadge);
+        }
 
         const meta = document.createElement('p');
         meta.className = 'paramext-question-meta';
         const completedCount = Number(stats.completedCount || 0);
-        const matchedBy = String(stats.matchedBy || (stats.similarMatch ? 'similar' : 'exact'));
         if (matchedBy === 'similar') {
             const score = Math.round(Math.max(0, Number(stats.matchedScore || 0)) * 100);
             const scoreText = score > 0 ? ' | совпадение: ' + score + '%' : '';
@@ -1891,7 +2097,7 @@
             meta.textContent = 'ожидание данных';
         }
 
-        head.appendChild(title);
+        head.appendChild(titleWrap);
         head.appendChild(meta);
         card.appendChild(head);
 
