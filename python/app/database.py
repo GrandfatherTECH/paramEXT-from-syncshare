@@ -93,19 +93,10 @@ class Database:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
 
-                CREATE TABLE IF NOT EXISTS extension_logs (
-                    id BIGSERIAL PRIMARY KEY,
-                    kind TEXT NOT NULL,
-                    payload JSONB NOT NULL,
-                    system JSONB NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                );
-
                 CREATE INDEX IF NOT EXISTS idx_openedu_attempts_test_key ON openedu_attempts (test_key);
                 CREATE INDEX IF NOT EXISTS idx_openedu_questions_test_key ON openedu_questions (test_key);
                 CREATE INDEX IF NOT EXISTS idx_openedu_stats_test_key ON openedu_answer_stats (test_key);
                 CREATE INDEX IF NOT EXISTS idx_openedu_participant_state_test_key ON openedu_participant_question_state (test_key);
-                CREATE INDEX IF NOT EXISTS idx_extension_logs_kind ON extension_logs (kind);
                 """
             )
 
@@ -444,11 +435,6 @@ class Database:
                 entry['fallbackAnswers'].append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': f})
 
         return result
-
-    # ── Logs (retired — no-op, kept for interface compat) ──────────
-
-    async def write_log(self, kind: str, payload: dict[str, Any], system: dict[str, Any]) -> None:
-        pass
 
     # ── Admin queries ──────────────────────────────────────────────
 
