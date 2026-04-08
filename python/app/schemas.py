@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ContextModel(BaseModel):
@@ -10,6 +10,13 @@ class ContextModel(BaseModel):
     title: str = ''
     testKey: str
     participantKey: str = ''
+
+    @field_validator('testKey')
+    @classmethod
+    def test_key_must_not_be_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError('testKey must not be empty')
+        return v.strip()
 
 
 class OpenEduAnswerIn(BaseModel):
@@ -25,6 +32,13 @@ class OpenEduQuestionIn(BaseModel):
     verified: bool = False
     isCorrect: bool = False
     answers: list[OpenEduAnswerIn] = Field(default_factory=list)
+
+    @field_validator('questionKey')
+    @classmethod
+    def question_key_must_not_be_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError('questionKey must not be empty')
+        return v.strip()
 
 
 class OpenEduAttemptIn(BaseModel):
