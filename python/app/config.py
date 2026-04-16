@@ -18,10 +18,10 @@ class Settings(BaseSettings):
     database_min_connections: int = Field(default=4, alias='DATABASE_MIN_CONNECTIONS')
     database_max_connections: int = Field(default=40, alias='DATABASE_MAX_CONNECTIONS')
 
-    api_bearer_token: str = Field(default='', alias='API_BEARER_TOKEN')
-    api_token: str = Field(default='', alias='API_TOKEN')
-    admin_token: str = Field(default='changeme-admin-token', alias='ADMIN_TOKEN')
-    admin_secret_key: str = Field(default='change-me-admin-secret', alias='ADMIN_SECRET_KEY')
+    api_bearer_token: str = Field(alias='API_BEARER_TOKEN')
+    api_token: str = Field(alias='API_TOKEN')
+    admin_token: str = Field(alias='ADMIN_TOKEN')
+    admin_secret_key: str = Field(alias='ADMIN_SECRET_KEY')
 
     bot_link: str = Field(default='', alias='BOT_LINK')
 
