@@ -101,6 +101,24 @@ async def cmd_stats(message: Message) -> None:
     )
 
 
+@router.message(Command('me'))
+async def cmd_me(message: Message) -> None:
+    assert _db is not None
+    user = await _db.get_user_by_telegram_id(message.from_user.id)
+    if not user:
+        await message.answer("Вы не зарегистрированы. Отправьте /start")
+        return
+
+    reg_date = user['created_at'].strftime('%d.%m.%Y %H:%M')
+    await message.answer(
+        f"<b>Ваш профиль:</b>\n\n"
+        f"Telegram ID: <code>{user['telegram_id']}</code>\n"
+        f"Дата регистрации: {reg_date}\n"
+        f"Статус: {'Активен' if user['is_active'] else 'Заблокирован'}",
+        parse_mode='HTML',
+    )
+
+
 @router.message(Command('help'))
 async def cmd_help(message: Message) -> None:
     await message.answer(
@@ -108,6 +126,7 @@ async def cmd_help(message: Message) -> None:
         "<b>Команды:</b>\n"
         "/start — Регистрация и получение токена\n"
         "/token — Показать текущий токен\n"
+        "/me — Ваш профиль\n"
         "/stats — Ваша статистика\n"
         "/help — Эта справка\n\n"
         "<b>Настройка расширения:</b>\n"

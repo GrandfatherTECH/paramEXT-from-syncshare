@@ -76,27 +76,26 @@
         setWandsVisible(hasHidden);
     }
 
-    function clickNextButton() {
-        const byValue = document.querySelector('input[type="submit"][value="' + settings.nextButtonText + '"]');
-        if (byValue) {
-            byValue.click();
-            return;
-        }
+    function clickNextButton(retries = 0) {
+        const maxRetries = 3;
+        const retryDelay = 1000;
 
-        const byText = Array.from(document.querySelectorAll('button, input[type="submit"]')).find((element) => {
-            if (!(element instanceof HTMLElement)) {
-                return false;
-            }
+        const findButton = () => {
+            const byValue = document.querySelector('input[type="submit"][value="' + settings.nextButtonText + '"]');
+            if (byValue) return byValue;
 
-            if (element instanceof HTMLInputElement) {
-                return element.value.trim() === settings.nextButtonText;
-            }
+            return Array.from(document.querySelectorAll('button, input[type="submit"]')).find((element) => {
+                if (!(element instanceof HTMLElement)) return false;
+                if (element instanceof HTMLInputElement) return element.value.trim() === settings.nextButtonText;
+                return (element.textContent || '').trim() === settings.nextButtonText;
+            });
+        };
 
-            return (element.textContent || '').trim() === settings.nextButtonText;
-        });
-
-        if (byText && byText instanceof HTMLElement) {
-            byText.click();
+        const button = findButton();
+        if (button && button instanceof HTMLElement) {
+            button.click();
+        } else if (retries < maxRetries) {
+            setTimeout(() => clickNextButton(retries + 1), retryDelay);
         }
     }
 
