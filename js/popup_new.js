@@ -37,6 +37,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const openeduActiveTabRefreshEnabled = document.getElementById('openeduActiveTabRefreshEnabled');
     const openeduShowFallbackStats = document.getElementById('openeduShowFallbackStats');
     const openeduAutoUseSimilarAnswers = document.getElementById('openeduAutoUseSimilarAnswers');
+    const openeduAutoUseFallbackAnswers = document.getElementById('openeduAutoUseFallbackAnswers');
     const openeduMissingAnswerAction = document.getElementById('openeduMissingAnswerAction');
     const openeduAutoAdvanceDelayMs = document.getElementById('openeduAutoAdvanceDelayMs');
     const btnSave = document.getElementById('btnSave');
@@ -309,6 +310,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         openeduActiveTabRefreshEnabled.checked = settings.openedu.activeTabRefreshEnabled;
         openeduShowFallbackStats.checked = settings.openedu.showFallbackStats;
         openeduAutoUseSimilarAnswers.checked = settings.openedu.autoUseSimilarAnswers;
+        openeduAutoUseFallbackAnswers.checked = settings.openedu.autoUseFallbackAnswers;
         openeduMissingAnswerAction.value = settings.openedu.missingAnswerAction;
         openeduAutoAdvanceDelayMs.value = String(settings.openedu.autoAdvanceDelayMs);
 
@@ -331,6 +333,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         nextState.openedu.activeTabRefreshEnabled = openeduActiveTabRefreshEnabled.checked;
         nextState.openedu.showFallbackStats = openeduShowFallbackStats.checked;
         nextState.openedu.autoUseSimilarAnswers = openeduAutoUseSimilarAnswers.checked;
+        nextState.openedu.autoUseFallbackAnswers = openeduAutoUseFallbackAnswers.checked;
         nextState.openedu.missingAnswerAction = openeduMissingAnswerAction.value;
         nextState.openedu.autoAdvanceDelayMs = Math.max(500, Number(openeduAutoAdvanceDelayMs.value || nextState.openedu.autoAdvanceDelayMs));
 
@@ -540,6 +543,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     bindAutoSave(openeduActiveTabRefreshEnabled, 'change');
     bindAutoSave(openeduShowFallbackStats, 'change');
     bindAutoSave(openeduAutoUseSimilarAnswers, 'change');
+    bindAutoSave(openeduAutoUseFallbackAnswers, 'change');
     bindAutoSave(openeduMissingAnswerAction, 'change');
 
     btnStart.addEventListener('click', async () => {

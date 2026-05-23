@@ -2788,6 +2788,7 @@
     function getAutoAnswerCandidates(stats) {
         const presentation = getQuestionPresentationState(stats);
         const canUseSimilar = Boolean(settings?.openedu?.autoUseSimilarAnswers);
+        const canUseFallback = Boolean(settings?.openedu?.autoUseFallbackAnswers);
         if (presentation.isSimilar && !canUseSimilar) {
             return [];
         }
@@ -2796,7 +2797,7 @@
             return presentation.verifiedAnswers;
         }
 
-        if (presentation.isSimilar && canUseSimilar) {
+        if (canUseFallback) {
             return presentation.fallbackAnswers;
         }
 
@@ -3015,6 +3016,38 @@
         });
     }
 
+    function findNextManualQuestion(questions, currentQuestion) {
+        const missingQuestions = (Array.isArray(questions) ? questions : [])
+            .filter((question) => question && !question.correct)
+            .filter((question) => !questionHasAnyUserAnswer(question))
+            .sort((a, b) => Number(a?.orderIndex || 0) - Number(b?.orderIndex || 0));
+        if (missingQuestions.length === 0) {
+            return null;
+        }
+
+        const currentOrder = Number(currentQuestion?.orderIndex || -1);
+        const afterCurrent = missingQuestions.find((question) => Number(question?.orderIndex || 0) > currentOrder);
+        return afterCurrent || missingQuestions[0] || null;
+    }
+
+    function alertManualQuestion(question, source, missingCount) {
+        if (!question) {
+            return;
+        }
+
+        pendingManualAnswerQuestion = question;
+        lastMissingAnswerSignature = question.questionKey || question.domId || '';
+        lastMissingAnswerActionAt = Date.now();
+        playMissingAnswerSound();
+        scrollToQuestion(question);
+        debugSync('missing_answer_action', {
+            action: 'alert',
+            source: String(source || 'missing-answer'),
+            missingCount: Math.max(1, Number(missingCount || 1)),
+            questionKey: question?.questionKey || ''
+        });
+    }
+
     function isEventInsideQuestion(event, question) {
         const target = event?.target instanceof Element ? event.target : null;
         const block = locateQuestionBlock(question);
@@ -3048,6 +3081,21 @@
 
             const delayMs = Math.max(900, Number(settings?.openedu?.autoAdvanceDelayMs || 1800));
             setTimeout(() => {
+                const refreshedQuestions = parseQuestions()
+                    .filter((item) => item?.ownerDocument === document);
+                if (refreshedQuestions.length > 0) {
+                    iframeQuestionsCache = refreshedQuestions;
+                }
+
+                const nextManualQuestion = findNextManualQuestion(
+                    refreshedQuestions.length > 0 ? refreshedQuestions : [question],
+                    question
+                );
+                if (nextManualQuestion) {
+                    alertManualQuestion(nextManualQuestion, 'manual-answer-next', 1);
+                    return;
+                }
+
                 requestNextSequencePage();
             }, delayMs);
 
@@ -3348,14 +3396,7 @@
         }
 
         if (action === 'alert') {
-            pendingManualAnswerQuestion = missingQuestions[0] || null;
-            playMissingAnswerSound();
-            scrollToQuestion(missingQuestions[0]);
-            debugSync('missing_answer_action', {
-                action,
-                missingCount: missingQuestions.length,
-                questionKey: missingQuestions[0]?.questionKey || ''
-            });
+            alertManualQuestion(missingQuestions[0], 'auto-cycle', missingQuestions.length);
         }
     }
 
