@@ -31,6 +31,7 @@
             showFallbackStats: true,
             autoUseSimilarAnswers: false,
             autoUseFallbackAnswers: false,
+            autoCheckAnswers: false,
             missingAnswerAction: 'stop'
         }
     };
@@ -121,6 +122,7 @@
             next.openedu.showFallbackStats = Boolean(openedu.showFallbackStats);
             next.openedu.autoUseSimilarAnswers = Boolean(openedu.autoUseSimilarAnswers);
             next.openedu.autoUseFallbackAnswers = Boolean(openedu.autoUseFallbackAnswers);
+            next.openedu.autoCheckAnswers = Boolean(openedu.autoCheckAnswers);
             if (openedu.missingAnswerAction === 'stop' || openedu.missingAnswerAction === 'advance' || openedu.missingAnswerAction === 'alert') {
                 next.openedu.missingAnswerAction = openedu.missingAnswerAction;
             }

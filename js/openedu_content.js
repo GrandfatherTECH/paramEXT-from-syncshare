@@ -98,6 +98,7 @@
     let scheduledCycleForce = false;
     let scheduledCycleAllowNetwork = false;
     let lastAutoSubmitByProblem = new Map();
+    let lastAutoCheckByProblem = new Map();
     let lastMissingAnswerActionAt = 0;
     let lastMissingAnswerSignature = '';
     let pendingManualAnswerQuestion = null;
@@ -2787,6 +2788,10 @@
         return settings?.openedu?.mode === 'autoSolve';
     }
 
+    function isOpeneduAutoCheckMode() {
+        return settings?.openedu?.mode === 'assist' && Boolean(settings?.openedu?.autoCheckAnswers);
+    }
+
     function getAutoAnswerCandidates(stats) {
         const presentation = getQuestionPresentationState(stats);
         const canUseSimilar = Boolean(settings?.openedu?.autoUseSimilarAnswers);
@@ -2857,6 +2862,68 @@
         return rect.width > 0 && rect.height > 0;
     }
 
+    function getActionElementLabel(element) {
+        if (!(element instanceof HTMLElement)) {
+            return '';
+        }
+
+        const parts = [];
+        ['data-value', 'aria-label', 'title', 'value'].forEach((attr) => {
+            const value = element.getAttribute(attr);
+            if (value) {
+                parts.push(value);
+            }
+        });
+        if (element instanceof HTMLInputElement && element.value) {
+            parts.push(element.value);
+        }
+        parts.push(textOf(element));
+        return normalizeText(parts.join(' '));
+    }
+
+    function isPassiveProblemActionLabel(label) {
+        return /(сохран|save|show answer|показ.*ответ|hint|подсказ|reset|сброс)/.test(label);
+    }
+
+    function isCheckProblemActionElement(element) {
+        const label = getActionElementLabel(element);
+        return /(провер|check)/.test(label)
+            && !/(отправ|submit)/.test(label)
+            && !isPassiveProblemActionLabel(label);
+    }
+
+    function isSubmitProblemActionElement(element) {
+        const label = getActionElementLabel(element);
+        if (isPassiveProblemActionLabel(label)) {
+            return false;
+        }
+
+        return /(провер|check|отправ|submit)/.test(label) || element.matches('button.submit, input[type="submit"]');
+    }
+
+    function findCheckButtonForQuestion(question) {
+        const container = getQuestionProblemContainer(question);
+        if (!(container instanceof HTMLElement)) {
+            return null;
+        }
+
+        const candidates = container.querySelectorAll([
+            '.problem-action-buttons button',
+            '.problem-action-buttons-wrapper button',
+            '.action button',
+            'button',
+            'input[type="button"]',
+            'input[type="submit"]'
+        ].join(', '));
+        for (const candidate of candidates) {
+            if (isVisibleActionElement(candidate) && isCheckProblemActionElement(candidate)) {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
     function findSubmitButtonForQuestion(question) {
         const container = getQuestionProblemContainer(question);
         if (!(container instanceof HTMLElement)) {
@@ -2867,12 +2934,10 @@
             'button.submit',
             'button.submit.btn-brand',
             'button[type="submit"]',
-            'input[type="submit"]',
-            '.problem-action-buttons button',
-            '.action button'
+            'input[type="submit"]'
         ].join(', '));
         for (const candidate of strictCandidates) {
-            if (isVisibleActionElement(candidate)) {
+            if (isVisibleActionElement(candidate) && isSubmitProblemActionElement(candidate)) {
                 return candidate;
             }
         }
@@ -2883,10 +2948,7 @@
                 continue;
             }
 
-            const text = normalizeText(candidate instanceof HTMLInputElement
-                ? (candidate.value || candidate.getAttribute('aria-label') || '')
-                : textOf(candidate));
-            if (/(провер|submit|check|save|сохран|отправ)/.test(text)) {
+            if (isSubmitProblemActionElement(candidate)) {
                 return candidate;
             }
         }
@@ -3110,6 +3172,10 @@
                 if (isOpeneduAutoSolveMode() && !requestNextSequencePage()) {
                     scheduleCycle(true, 'manual-answer-complete', { allowNetwork: true });
                 } else if (!isOpeneduAutoSolveMode()) {
+                    maybeAutoCheckInsertedAnswers(
+                        refreshedQuestions.length > 0 ? refreshedQuestions : [question],
+                        lastMergedStatsByQuestion || {}
+                    );
                     scheduleCycle(true, 'manual-answer-queue-complete', { allowNetwork: true });
                 }
             }, delayMs);
@@ -3351,6 +3417,84 @@
         return submittedCount;
     }
 
+    function maybeAutoCheckInsertedAnswers(questions, statsByQuestion) {
+        if (!isOpeneduAutoCheckMode()) {
+            return 0;
+        }
+
+        const grouped = new Map();
+        (Array.isArray(questions) ? questions : []).forEach((question) => {
+            const key = getProblemAutoKey(question);
+            if (!key) {
+                return;
+            }
+            if (!grouped.has(key)) {
+                grouped.set(key, []);
+            }
+            grouped.get(key).push(question);
+        });
+
+        const now = Date.now();
+        let checkedCount = 0;
+        grouped.forEach((groupQuestions, problemKey) => {
+            if (groupQuestions.every((question) => question.correct)) {
+                return;
+            }
+
+            const ready = groupQuestions.every((question) => {
+                if (question.correct) {
+                    return true;
+                }
+
+                const stats = statsByQuestion?.[question.questionKey] || null;
+                const answerCandidates = getAutoAnswerCandidates(stats);
+                const block = locateQuestionBlock(question);
+                if (!(block instanceof HTMLElement)) {
+                    return false;
+                }
+
+                if (answerCandidates.length > 0) {
+                    const payload = questionAllowsMultipleAnswers(block)
+                        ? answerCandidates
+                        : [answerCandidates[0]];
+                    return areAnswersAppliedToQuestion(question, payload);
+                }
+
+                return questionHasAnyUserAnswer(question);
+            });
+            if (!ready) {
+                return;
+            }
+
+            const lastCheckAt = Number(lastAutoCheckByProblem.get(problemKey) || 0);
+            if (now - lastCheckAt < AUTO_SUBMIT_COOLDOWN_MS) {
+                return;
+            }
+
+            const checkButton = findCheckButtonForQuestion(groupQuestions[0]);
+            if (!checkButton) {
+                debugSync('auto_check_skipped', {
+                    reason: 'check_button_not_found',
+                    problemKey,
+                    questionKeys: groupQuestions.map((question) => question.questionKey)
+                });
+                return;
+            }
+
+            lastAutoCheckByProblem.set(problemKey, now);
+            lastSubmitActionAt = now;
+            checkButton.click();
+            checkedCount += 1;
+            debugSync('auto_check_clicked', {
+                problemKey,
+                questionKeys: groupQuestions.map((question) => question.questionKey),
+                label: getActionElementLabel(checkButton)
+            });
+        });
+
+        return checkedCount;
+    }
+
     function findMissingAutoAnswerQuestions(questions, statsByQuestion) {
         if (!isOpeneduAutoInsertMode()) {
             return [];
@@ -3451,12 +3595,21 @@
         if (autoApply.appliedCount > 0 && !isOpeneduAutoSolveMode()) {
             setTimeout(() => {
                 quickRerender();
-                handleMissingAutoAnswers(localQuestions, statsByQuestion);
+                const refreshedQuestions = parseQuestions()
+                    .filter((question) => question?.ownerDocument === document);
+                if (refreshedQuestions.length > 0) {
+                    iframeQuestionsCache = refreshedQuestions;
+                }
+                const nextQuestions = refreshedQuestions.length > 0 ? refreshedQuestions : localQuestions;
+                const nextStats = lastMergedStatsByQuestion || statsByQuestion;
+                maybeAutoCheckInsertedAnswers(nextQuestions, nextStats);
+                handleMissingAutoAnswers(nextQuestions, nextStats);
             }, 250);
             return;
         }
 
         if (!isOpeneduAutoSolveMode()) {
+            maybeAutoCheckInsertedAnswers(localQuestions, statsByQuestion);
             handleMissingAutoAnswers(localQuestions, statsByQuestion);
             return;
         }
