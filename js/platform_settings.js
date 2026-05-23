@@ -28,7 +28,9 @@
             activeTabRefreshEnabled: true,
             autoAdvanceDelayMs: 1800,
             requiredCompletionOnly: true,
-            showFallbackStats: true
+            showFallbackStats: true,
+            autoUseSimilarAnswers: false,
+            missingAnswerAction: 'stop'
         }
     };
 
@@ -116,6 +118,10 @@
             next.openedu.activeTabRefreshEnabled = Boolean(openedu.activeTabRefreshEnabled);
             next.openedu.requiredCompletionOnly = Boolean(openedu.requiredCompletionOnly);
             next.openedu.showFallbackStats = Boolean(openedu.showFallbackStats);
+            next.openedu.autoUseSimilarAnswers = Boolean(openedu.autoUseSimilarAnswers);
+            if (openedu.missingAnswerAction === 'stop' || openedu.missingAnswerAction === 'advance' || openedu.missingAnswerAction === 'alert') {
+                next.openedu.missingAnswerAction = openedu.missingAnswerAction;
+            }
             next.openedu.autoAdvanceDelayMs = Math.max(500, toNumberOrFallback(openedu.autoAdvanceDelayMs, next.openedu.autoAdvanceDelayMs));
         }
 

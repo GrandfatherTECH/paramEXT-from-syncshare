@@ -36,6 +36,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const openeduRequiredCompletionOnly = document.getElementById('openeduRequiredCompletionOnly');
     const openeduActiveTabRefreshEnabled = document.getElementById('openeduActiveTabRefreshEnabled');
     const openeduShowFallbackStats = document.getElementById('openeduShowFallbackStats');
+    const openeduAutoUseSimilarAnswers = document.getElementById('openeduAutoUseSimilarAnswers');
+    const openeduMissingAnswerAction = document.getElementById('openeduMissingAnswerAction');
     const openeduAutoAdvanceDelayMs = document.getElementById('openeduAutoAdvanceDelayMs');
     const btnSave = document.getElementById('btnSave');
 
@@ -301,6 +303,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         openeduRequiredCompletionOnly.checked = settings.openedu.requiredCompletionOnly;
         openeduActiveTabRefreshEnabled.checked = settings.openedu.activeTabRefreshEnabled;
         openeduShowFallbackStats.checked = settings.openedu.showFallbackStats;
+        openeduAutoUseSimilarAnswers.checked = settings.openedu.autoUseSimilarAnswers;
+        openeduMissingAnswerAction.value = settings.openedu.missingAnswerAction;
         openeduAutoAdvanceDelayMs.value = String(settings.openedu.autoAdvanceDelayMs);
 
         setBackendPlatform(settings.activePlatform);
@@ -321,6 +325,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         nextState.openedu.requiredCompletionOnly = openeduRequiredCompletionOnly.checked;
         nextState.openedu.activeTabRefreshEnabled = openeduActiveTabRefreshEnabled.checked;
         nextState.openedu.showFallbackStats = openeduShowFallbackStats.checked;
+        nextState.openedu.autoUseSimilarAnswers = openeduAutoUseSimilarAnswers.checked;
+        nextState.openedu.missingAnswerAction = openeduMissingAnswerAction.value;
         nextState.openedu.autoAdvanceDelayMs = Math.max(500, Number(openeduAutoAdvanceDelayMs.value || nextState.openedu.autoAdvanceDelayMs));
 
         nextState = writeBackendFieldsToState(nextState);

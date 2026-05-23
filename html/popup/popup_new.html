@@ -101,6 +101,22 @@
                 <label class="form-check-label" for="openeduShowFallbackStats">Использовать резервную статистику (как в Moodle)</label>
             </div>
 
+            <div class="openedu-auto-options">
+                <h3>Авто-режимы</h3>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="openeduAutoUseSimilarAnswers">
+                    <label class="form-check-label" for="openeduAutoUseSimilarAnswers">Автоматически вставлять ответы похожих вопросов</label>
+                </div>
+                <div class="mb-2">
+                    <label for="openeduMissingAnswerAction" class="form-label">Если ответа нет</label>
+                    <select class="form-control form-control-sm" id="openeduMissingAnswerAction">
+                        <option value="stop">Ничего не делать</option>
+                        <option value="alert">Звук и перейти к вопросу</option>
+                        <option value="advance">Перейти к следующей странице</option>
+                    </select>
+                </div>
+            </div>
+
             <div class="mb-2">
                 <label for="openeduAutoAdvanceDelayMs" class="form-label">Задержка авто-перехода (мс)</label>
                 <input type="number" min="500" step="100" class="form-control form-control-sm" id="openeduAutoAdvanceDelayMs">
