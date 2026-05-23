@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hmac
+import secrets
+import time
 from typing import TYPE_CHECKING
 
 from fastapi import Header, HTTPException, Request, status
@@ -15,6 +18,7 @@ _signer: URLSafeTimedSerializer | None = None
 
 ADMIN_COOKIE = 'paramext_admin'
 ADMIN_MAX_AGE = 86400  # 24 hours
+ADMIN_CSRF_FIELD = 'csrf_token'
 
 
 def set_database_ref(db: Database) -> None:
@@ -25,7 +29,10 @@ def set_database_ref(db: Database) -> None:
 def _get_signer() -> URLSafeTimedSerializer:
     global _signer
     if _signer is None:
-        _signer = URLSafeTimedSerializer(settings.admin_secret_key)
+        secret = settings.admin_secret_key
+        if not secret or secret == 'change-me-admin-secret':
+            secret = settings.admin_token
+        _signer = URLSafeTimedSerializer(secret)
     return _signer
 
 
@@ -64,28 +71,49 @@ async def require_api_token(
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Неверный API токен')
 
 
-def require_admin_session(
-    request: Request,
-    token: str | None = None,
-    x_admin_token: str | None = Header(default=None),
-) -> None:
-    # 1. Check signed cookie.
+def verify_admin_password(value: str) -> bool:
+    return hmac.compare_digest(str(value or ''), settings.admin_token)
+
+
+def load_admin_session(request: Request) -> dict | None:
     cookie_value = request.cookies.get(ADMIN_COOKIE, '')
-    if cookie_value:
-        try:
-            data = _get_signer().loads(cookie_value, max_age=ADMIN_MAX_AGE)
-            if data == settings.admin_token:
-                return
-        except (BadSignature, SignatureExpired):
-            pass
+    if not cookie_value:
+        return None
 
-    # 2. Fallback: query param or header (backward compat).
-    final_token = token or x_admin_token or ''
-    if final_token == settings.admin_token:
-        return
+    try:
+        data = _get_signer().loads(cookie_value, max_age=ADMIN_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return None
 
+    if not isinstance(data, dict):
+        return None
+    if data.get('sub') != 'admin':
+        return None
+    if not data.get('sid') or not data.get('csrf'):
+        return None
+
+    return data
+
+
+def require_admin_session(request: Request) -> dict:
+    session = load_admin_session(request)
+    if session:
+        return session
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Требуется авторизация')
 
 
+def verify_admin_csrf(request: Request, csrf_token: str) -> None:
+    session = require_admin_session(request)
+    expected = str(session.get('csrf') or '')
+    if not expected or not hmac.compare_digest(expected, str(csrf_token or '')):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Неверный CSRF токен')
+
+
 def create_admin_cookie_value() -> str:
-    return _get_signer().dumps(settings.admin_token)
+    return _get_signer().dumps({
+        'v': 1,
+        'sub': 'admin',
+        'sid': secrets.token_urlsafe(24),
+        'csrf': secrets.token_urlsafe(24),
+        'iat': int(time.time()),
+    })

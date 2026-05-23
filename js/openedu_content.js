@@ -1297,6 +1297,114 @@
         return cleanRawText;
     }
 
+    function parseOpenEduDataLiteral(raw) {
+        if (typeof openeduShared.parsePythonishDataLiteral === 'function') {
+            return openeduShared.parsePythonishDataLiteral(raw);
+        }
+
+        try {
+            return JSON.parse(String(raw || ''));
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function getMatchingTableApp(root) {
+        if (!(root instanceof HTMLElement)) {
+            return null;
+        }
+        const app = root.querySelector('.adv-app[data-type="MatchingTableVueApp"][data-initial-data]');
+        return app instanceof HTMLElement ? app : null;
+    }
+
+    function getMatchingTableInput(root) {
+        if (!(root instanceof HTMLElement)) {
+            return null;
+        }
+
+        const textInputs = root.querySelectorAll('input[type="text"]');
+        for (const input of textInputs) {
+            if (!(input instanceof HTMLInputElement)) {
+                continue;
+            }
+            const parsed = parseOpenEduDataLiteral(input.value || '');
+            if (parsed && typeof parsed === 'object' && parsed.answer && typeof parsed.answer === 'object') {
+                return input;
+            }
+        }
+
+        return textInputs[0] instanceof HTMLInputElement ? textInputs[0] : null;
+    }
+
+    function getMatchingTableData(root) {
+        const app = getMatchingTableApp(root);
+        if (!app) {
+            return null;
+        }
+
+        const initialData = parseOpenEduDataLiteral(app.getAttribute('data-initial-data') || '');
+        if (!initialData || typeof initialData !== 'object') {
+            return null;
+        }
+
+        const input = getMatchingTableInput(root);
+        if (!(input instanceof HTMLInputElement)) {
+            return null;
+        }
+
+        return { app, input, initialData };
+    }
+
+    function buildMatchingTableOptions(root) {
+        const matchingData = getMatchingTableData(root);
+        if (!matchingData || typeof openeduShared.buildMatchingTablePairs !== 'function') {
+            return [];
+        }
+
+        const pairs = openeduShared.buildMatchingTablePairs(
+            matchingData.initialData,
+            matchingData.input.value || '',
+            true,
+        );
+        const options = [];
+        const seen = new Set();
+        const inputName = String(matchingData.input.name || '').trim();
+        const inputPath = buildElementPath(root, matchingData.input);
+
+        pairs.forEach((pair, idx) => {
+            const answerText = normalizeQuestionOptionText(pair.answerText) || String(pair.answerText || '').trim();
+            const cellId = String(pair.cellId || '').trim();
+            const answerId = String(pair.answerId || '').trim();
+            if (!answerText || !cellId || !answerId) {
+                return;
+            }
+
+            const dedupeKey = cellId + '|' + answerId;
+            if (seen.has(dedupeKey)) {
+                return;
+            }
+            seen.add(dedupeKey);
+
+            options.push({
+                answerKey: 'match:' + cellId + ':' + answerId,
+                answerText,
+                selected: Boolean(pair.selected),
+                correct: Boolean(pair.selected) && isQuestionCorrect(root),
+                answerAliases: [pair.answerTitle, pair.cellLabel].filter(Boolean),
+                inputId: matchingData.input.id || '',
+                inputName,
+                groupKey: inputName ? ('matching:' + inputName) : 'matching',
+                groupPath: '',
+                inputPath,
+                inputType: 'matching-table',
+                matchingCellId: cellId,
+                matchingAnswerId: answerId
+            });
+        });
+
+        return options;
+    }
+
     function getQuestionBlocks() {
         const seen = new WeakSet();
         const result = [];
@@ -1566,6 +1674,11 @@
 
     function getAnswerOptions(root) {
         const options = [];
+        const matchingOptions = buildMatchingTableOptions(root);
+        if (matchingOptions.length > 0) {
+            return matchingOptions;
+        }
+
         const labels = root.querySelectorAll(OPTION_LABEL_SELECTOR);
         const usedKeys = new Set();
 
@@ -2292,6 +2405,9 @@
     }
 
     function questionAllowsMultipleAnswers(block) {
+        if (getMatchingTableData(block)) {
+            return true;
+        }
         const checkboxes = block.querySelectorAll('input[type="checkbox"]');
         const radios = block.querySelectorAll('input[type="radio"]');
         return checkboxes.length > 0 && radios.length === 0;
@@ -2365,6 +2481,97 @@
         return resolved;
     }
 
+    function setNativeInputValue(input, value) {
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+            HTMLInputElement.prototype, 'value'
+        )?.set;
+        if (nativeSetter) {
+            nativeSetter.call(input, value);
+        } else {
+            input.value = value;
+        }
+    }
+
+    function normalizeMatchingTargetKey(value) {
+        return normalizeText(String(value || '').replace(/\s*:\s*/g, ': '));
+    }
+
+    function resolveMatchingTargets(block, answers) {
+        const matchingData = getMatchingTableData(block);
+        if (!matchingData || typeof openeduShared.buildMatchingTablePairs !== 'function') {
+            return [];
+        }
+
+        const candidates = openeduShared.buildMatchingTablePairs(matchingData.initialData, {}, true);
+        const byKey = new Map();
+        const byText = new Map();
+
+        candidates.forEach((candidate) => {
+            const cellId = String(candidate.cellId || '').trim();
+            const answerId = String(candidate.answerId || '').trim();
+            const answerText = String(candidate.answerText || '').trim();
+            if (!cellId || !answerId || !answerText) {
+                return;
+            }
+
+            const item = { cellId, answerId, answerText };
+            byKey.set('match:' + cellId + ':' + answerId, item);
+            byText.set(normalizeMatchingTargetKey(answerText), item);
+        });
+
+        const resolved = [];
+        const seenCells = new Set();
+        (Array.isArray(answers) ? answers : []).forEach((answer) => {
+            const rawKey = String(answer?.answerKey || '').trim();
+            const rawText = String(answer?.answerText || answer || '').trim();
+            const match = byKey.get(rawKey) || byText.get(normalizeMatchingTargetKey(rawText));
+            if (!match || seenCells.has(match.cellId)) {
+                return;
+            }
+            seenCells.add(match.cellId);
+            resolved.push(match);
+        });
+
+        return resolved;
+    }
+
+    function applyMatchingTableAnswers(block, question, answers, mode) {
+        const matchingData = getMatchingTableData(block);
+        if (!matchingData) {
+            return false;
+        }
+
+        const targets = resolveMatchingTargets(block, answers);
+        if (targets.length === 0) {
+            debugSync('apply_answers_failed', {
+                reason: 'matching_targets_not_resolved',
+                questionKey: question?.questionKey || ''
+            });
+            return false;
+        }
+
+        const current = parseOpenEduDataLiteral(matchingData.input.value || '') || {};
+        const currentAnswer = current && typeof current.answer === 'object' ? current.answer : {};
+        const nextAnswer = mode === 'set-all' ? {} : { ...currentAnswer };
+        targets.forEach((target) => {
+            nextAnswer[target.cellId] = [target.answerId];
+        });
+
+        setNativeInputValue(matchingData.input, JSON.stringify({ answer: nextAnswer }));
+        matchingData.input.dispatchEvent(new Event('input', { bubbles: true }));
+        matchingData.input.dispatchEvent(new Event('change', { bubbles: true }));
+        highlightQuestionBlock(block);
+        debugSync('apply_answers_success', {
+            questionKey: question?.questionKey || '',
+            mode: 'matching-table',
+            selected: targets.map((item) => ({
+                answerText: item.answerText,
+                answerKey: 'match:' + item.cellId + ':' + item.answerId
+            }))
+        });
+        return true;
+    }
+
     function applyAnswersToQuestion(question, answers, mode) {
         const block = locateQuestionBlock(question);
         if (!block) {
@@ -2373,6 +2580,10 @@
                 questionKey: question?.questionKey || ''
             });
             return false;
+        }
+
+        if (getMatchingTableData(block)) {
+            return applyMatchingTableAnswers(block, question, answers, mode);
         }
 
         // Text input questions: fill the field directly instead of
@@ -2392,14 +2603,7 @@
                 return false;
             }
 
-            const nativeSetter = Object.getOwnPropertyDescriptor(
-                HTMLInputElement.prototype, 'value'
-            )?.set;
-            if (nativeSetter) {
-                nativeSetter.call(textInput, targetText);
-            } else {
-                textInput.value = targetText;
-            }
+            setNativeInputValue(textInput, targetText);
             textInput.dispatchEvent(new Event('input', { bubbles: true }));
             textInput.dispatchEvent(new Event('change', { bubbles: true }));
             highlightQuestionBlock(block);

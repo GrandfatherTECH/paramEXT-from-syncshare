@@ -1003,9 +1003,13 @@ class Database:
                 SELECT
                     (SELECT COUNT(*) FROM users) AS users_count,
                     (SELECT COUNT(*) FROM users WHERE last_active_at > NOW() - INTERVAL '24 hours') AS active_users_24h,
+                    (SELECT COUNT(*) FROM users WHERE last_active_at > NOW() - INTERVAL '7 days') AS active_users_7d,
                     (SELECT COUNT(*) FROM openedu_tests) AS tests_count,
                     (SELECT COUNT(*) FROM openedu_questions) AS questions_count,
-                    (SELECT COUNT(*) FROM openedu_attempts) AS attempts_count
+                    (SELECT COUNT(*) FROM openedu_attempts) AS attempts_count,
+                    (SELECT COUNT(*) FROM openedu_attempts WHERE created_at > NOW() - INTERVAL '24 hours') AS attempts_24h,
+                    (SELECT COALESCE(SUM(verified_count), 0) FROM openedu_answer_stats) AS verified_answers_count,
+                    (SELECT COALESCE(SUM(fallback_count), 0) FROM openedu_answer_stats) AS fallback_answers_count
                 """
             )
             top_tests = await conn.fetch(
@@ -1020,21 +1024,79 @@ class Database:
                 LIMIT 20
                 """
             )
+            latest_users = await conn.fetch(
+                """
+                SELECT id, telegram_id, telegram_username, telegram_first_name, is_active, last_active_at
+                FROM users
+                ORDER BY last_active_at DESC
+                LIMIT 8
+                """
+            )
+            latest_attempts = await conn.fetch(
+                """
+                SELECT a.id, a.test_key, a.completed, a.created_at, t.host, t.path, t.title,
+                       u.id AS user_id, u.telegram_username, u.telegram_first_name, u.telegram_id
+                FROM openedu_attempts a
+                LEFT JOIN openedu_tests t ON t.test_key = a.test_key
+                LEFT JOIN users u ON u.id = a.user_id
+                ORDER BY a.created_at DESC
+                LIMIT 10
+                """
+            )
         return {
             'counters': dict(counters or {}),
             'top_tests': [dict(r) for r in top_tests],
+            'latest_users': [dict(r) for r in latest_users],
+            'latest_attempts': [dict(r) for r in latest_attempts],
         }
 
-    async def get_admin_users_page(self, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    async def get_admin_users_page(self, search: str = '', limit: int = 50, offset: int = 0) -> dict[str, Any]:
         assert self.pool is not None
+        needle = '%' + search.strip() + '%' if search.strip() else ''
         async with self.pool.acquire() as conn:
+            if needle:
+                total = await conn.fetchval(
+                    """
+                    SELECT COUNT(*)
+                    FROM users
+                    WHERE telegram_username ILIKE $1
+                       OR telegram_first_name ILIKE $1
+                       OR telegram_id::text ILIKE $1
+                       OR id::text ILIKE $1
+                    """,
+                    needle,
+                )
+                where_clause = """
+                    WHERE u.telegram_username ILIKE $3
+                       OR u.telegram_first_name ILIKE $3
+                       OR u.telegram_id::text ILIKE $3
+                       OR u.id::text ILIKE $3
+                """
+                rows = await conn.fetch(
+                    f"""
+                    SELECT u.id, u.telegram_id, u.telegram_username, u.telegram_first_name,
+                           u.is_active, u.created_at, u.last_active_at,
+                           COUNT(DISTINCT ps.test_key) AS tests_count,
+                           COUNT(ps.question_key) AS questions_count,
+                           COUNT(*) FILTER (WHERE ps.is_correct) AS completions_count
+                    FROM users u
+                    LEFT JOIN openedu_participant_question_state ps ON ps.user_id = u.id
+                    {where_clause}
+                    GROUP BY u.id
+                    ORDER BY u.last_active_at DESC
+                    LIMIT $1 OFFSET $2
+                    """,
+                    limit, offset, needle,
+                )
+                return {'total': total, 'users': [dict(r) for r in rows], 'search': search.strip()}
+
             total = await conn.fetchval("SELECT COUNT(*) FROM users")
             rows = await conn.fetch(
                 """
                 SELECT u.id, u.telegram_id, u.telegram_username, u.telegram_first_name,
                        u.is_active, u.created_at, u.last_active_at,
                        COUNT(DISTINCT ps.test_key) AS tests_count,
-                       COUNT(ps.*) AS questions_count,
+                       COUNT(ps.question_key) AS questions_count,
                        COUNT(*) FILTER (WHERE ps.is_correct) AS completions_count
                 FROM users u
                 LEFT JOIN openedu_participant_question_state ps ON ps.user_id = u.id
@@ -1044,28 +1106,177 @@ class Database:
                 """,
                 limit, offset,
             )
-        return {'total': total, 'users': [dict(r) for r in rows]}
+        return {'total': total, 'users': [dict(r) for r in rows], 'search': search.strip()}
 
-    async def get_admin_tests_page(self, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    async def get_admin_user_detail(self, user_id: int) -> dict[str, Any]:
         assert self.pool is not None
         async with self.pool.acquire() as conn:
+            user = await conn.fetchrow(
+                """
+                SELECT id, telegram_id, telegram_username, telegram_first_name,
+                       is_active, created_at, last_active_at
+                FROM users
+                WHERE id = $1
+                """,
+                user_id,
+            )
+            if not user:
+                return {'user': None}
+
+            counters = await conn.fetchrow(
+                """
+                SELECT
+                    (SELECT COUNT(DISTINCT test_key) FROM openedu_participant_question_state WHERE user_id = $1) AS tests_count,
+                    (SELECT COUNT(*) FROM openedu_participant_question_state WHERE user_id = $1) AS questions_count,
+                    (SELECT COUNT(*) FROM openedu_participant_question_state WHERE user_id = $1 AND is_correct) AS completions_count,
+                    (SELECT COUNT(*) FROM openedu_attempts WHERE user_id = $1) AS attempts_count,
+                    (SELECT COUNT(*) FROM openedu_attempts WHERE user_id = $1 AND created_at > NOW() - INTERVAL '24 hours') AS attempts_24h
+                """,
+                user_id,
+            )
+            tests = await conn.fetch(
+                """
+                SELECT t.test_key, t.host, t.path, t.title,
+                       COUNT(ps.question_key) AS questions_count,
+                       COUNT(*) FILTER (WHERE ps.is_correct) AS completions_count,
+                       MAX(ps.updated_at) AS last_activity_at
+                FROM openedu_participant_question_state ps
+                JOIN openedu_tests t ON t.test_key = ps.test_key
+                WHERE ps.user_id = $1
+                GROUP BY t.test_key, t.host, t.path, t.title
+                ORDER BY last_activity_at DESC
+                LIMIT 30
+                """,
+                user_id,
+            )
+            attempts = await conn.fetch(
+                """
+                SELECT a.id, a.test_key, a.completed, a.created_at, t.host, t.path, t.title
+                FROM openedu_attempts a
+                LEFT JOIN openedu_tests t ON t.test_key = a.test_key
+                WHERE a.user_id = $1
+                ORDER BY a.created_at DESC
+                LIMIT 30
+                """,
+                user_id,
+            )
+
+        return {
+            'user': dict(user),
+            'counters': dict(counters or {}),
+            'tests': [dict(r) for r in tests],
+            'attempts': [dict(r) for r in attempts],
+        }
+
+    async def get_admin_tests_page(self, search: str = '', limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        assert self.pool is not None
+        needle = '%' + search.strip() + '%' if search.strip() else ''
+        async with self.pool.acquire() as conn:
+            if needle:
+                total = await conn.fetchval(
+                    """
+                    SELECT COUNT(*)
+                    FROM openedu_tests
+                    WHERE test_key ILIKE $1 OR host ILIKE $1 OR path ILIKE $1 OR title ILIKE $1
+                    """,
+                    needle,
+                )
+                where_clause = "WHERE t.test_key ILIKE $3 OR t.host ILIKE $3 OR t.path ILIKE $3 OR t.title ILIKE $3"
+                rows = await conn.fetch(
+                    f"""
+                    SELECT t.test_key, t.host, t.path, t.title, t.updated_at,
+                           (SELECT COUNT(*) FROM openedu_questions q WHERE q.test_key = t.test_key) AS question_count,
+                           (SELECT COALESCE(SUM(q.completed_count), 0) FROM openedu_questions q WHERE q.test_key = t.test_key) AS completed_count,
+                           (SELECT COUNT(DISTINCT a.user_id) FROM openedu_attempts a WHERE a.test_key = t.test_key AND a.user_id IS NOT NULL) AS unique_users,
+                           (SELECT COUNT(*) FROM openedu_attempts a WHERE a.test_key = t.test_key) AS attempts_count
+                    FROM openedu_tests t
+                    {where_clause}
+                    ORDER BY t.updated_at DESC
+                    LIMIT $1 OFFSET $2
+                    """,
+                    limit, offset, needle,
+                )
+                return {'total': total, 'tests': [dict(r) for r in rows], 'search': search.strip()}
+
             total = await conn.fetchval("SELECT COUNT(*) FROM openedu_tests")
             rows = await conn.fetch(
                 """
                 SELECT t.test_key, t.host, t.path, t.title, t.updated_at,
-                       COUNT(DISTINCT q.question_key) AS question_count,
-                       COALESCE(SUM(q.completed_count), 0) AS completed_count,
-                       COUNT(DISTINCT a.user_id) AS unique_users
+                       (SELECT COUNT(*) FROM openedu_questions q WHERE q.test_key = t.test_key) AS question_count,
+                       (SELECT COALESCE(SUM(q.completed_count), 0) FROM openedu_questions q WHERE q.test_key = t.test_key) AS completed_count,
+                       (SELECT COUNT(DISTINCT a.user_id) FROM openedu_attempts a WHERE a.test_key = t.test_key AND a.user_id IS NOT NULL) AS unique_users,
+                       (SELECT COUNT(*) FROM openedu_attempts a WHERE a.test_key = t.test_key) AS attempts_count
                 FROM openedu_tests t
-                LEFT JOIN openedu_questions q ON q.test_key = t.test_key
-                LEFT JOIN openedu_attempts a ON a.test_key = t.test_key AND a.user_id IS NOT NULL
-                GROUP BY t.test_key, t.host, t.path, t.title, t.updated_at
                 ORDER BY t.updated_at DESC
                 LIMIT $1 OFFSET $2
                 """,
                 limit, offset,
             )
-        return {'total': total, 'tests': [dict(r) for r in rows]}
+        return {'total': total, 'tests': [dict(r) for r in rows], 'search': search.strip()}
+
+    async def get_admin_test_detail(self, test_key: str, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            test = await conn.fetchrow(
+                "SELECT test_key, host, path, title, created_at, updated_at FROM openedu_tests WHERE test_key = $1",
+                test_key,
+            )
+            if not test:
+                return {'test': None}
+
+            counters = await conn.fetchrow(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM openedu_questions WHERE test_key = $1) AS questions_count,
+                    (SELECT COALESCE(SUM(completed_count), 0) FROM openedu_questions WHERE test_key = $1) AS completed_count,
+                    (SELECT COUNT(*) FROM openedu_attempts WHERE test_key = $1) AS attempts_count,
+                    (SELECT COUNT(DISTINCT user_id) FROM openedu_attempts WHERE test_key = $1 AND user_id IS NOT NULL) AS unique_users
+                """,
+                test_key,
+            )
+            total_questions = await conn.fetchval(
+                "SELECT COUNT(*) FROM openedu_questions WHERE test_key = $1",
+                test_key,
+            )
+            questions = await conn.fetch(
+                """
+                SELECT q.test_key, q.question_key, q.prompt, q.completed_count, q.updated_at,
+                       COUNT(a.answer_key) AS answers_count,
+                       COALESCE(SUM(a.verified_count), 0) AS verified_count,
+                       COALESCE(SUM(a.fallback_count), 0) AS fallback_count
+                FROM openedu_questions q
+                LEFT JOIN openedu_answer_stats a
+                    ON a.test_key = q.test_key AND a.question_key = q.question_key
+                WHERE q.test_key = $1
+                GROUP BY q.test_key, q.question_key, q.prompt, q.completed_count, q.updated_at
+                ORDER BY q.updated_at DESC
+                LIMIT $2 OFFSET $3
+                """,
+                test_key, limit, offset,
+            )
+            users = await conn.fetch(
+                """
+                SELECT u.id, u.telegram_id, u.telegram_username, u.telegram_first_name,
+                       COUNT(ps.question_key) AS questions_count,
+                       COUNT(*) FILTER (WHERE ps.is_correct) AS completions_count,
+                       MAX(ps.updated_at) AS last_activity_at
+                FROM openedu_participant_question_state ps
+                JOIN users u ON u.id = ps.user_id
+                WHERE ps.test_key = $1
+                GROUP BY u.id
+                ORDER BY last_activity_at DESC
+                LIMIT 20
+                """,
+                test_key,
+            )
+
+        return {
+            'test': dict(test),
+            'counters': dict(counters or {}),
+            'total_questions': total_questions,
+            'questions': [dict(r) for r in questions],
+            'users': [dict(r) for r in users],
+        }
 
     async def get_admin_questions_page(self, search: str = '', limit: int = 50, offset: int = 0) -> dict[str, Any]:
         assert self.pool is not None

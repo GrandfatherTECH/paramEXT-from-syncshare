@@ -149,6 +149,184 @@
             .sort();
     }
 
+    function parsePythonishDataLiteral(source) {
+        const raw = String(source || '').trim();
+        if (!raw) {
+            return null;
+        }
+
+        try {
+            return JSON.parse(raw);
+        } catch (_) {
+            // OpenEdu advanced components often put a Python-like literal into
+            // data-initial-data: single-quoted strings plus True/False/None.
+        }
+
+        let json = '';
+        let i = 0;
+        while (i < raw.length) {
+            const ch = raw[i];
+            if (ch !== "'") {
+                json += ch;
+                i += 1;
+                continue;
+            }
+
+            i += 1;
+            let value = '';
+            while (i < raw.length) {
+                const inner = raw[i];
+                if (inner === '\\' && i + 1 < raw.length) {
+                    value += inner + raw[i + 1];
+                    i += 2;
+                    continue;
+                }
+                if (inner === "'") {
+                    i += 1;
+                    break;
+                }
+                value += inner;
+                i += 1;
+            }
+            let decodedValue = value;
+            try {
+                decodedValue = JSON.parse('"' + value
+                    .replace(/"/g, '\\"')
+                    .replace(/\r/g, '\\r')
+                    .replace(/\n/g, '\\n') + '"');
+            } catch (_) {
+                decodedValue = value;
+            }
+            json += JSON.stringify(decodedValue);
+        }
+
+        json = json
+            .replace(/\bTrue\b/g, 'true')
+            .replace(/\bFalse\b/g, 'false')
+            .replace(/\bNone\b/g, 'null');
+
+        try {
+            return JSON.parse(json);
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function normalizeMatchingText(value) {
+        return collapseWhitespace(String(value || '')
+            .replace(/\.\s*\{[^{}]*\}/g, ' ')
+            .replace(/\{[^{}]*\}/g, ' ')
+            .replace(/[*_`~]/g, ' ')
+            .replace(/(^|\s)\.(?=\s|$)/g, ' ')
+            .replace(/\s+/g, ' '));
+    }
+
+    function matchingCellText(cell) {
+        if (!cell || typeof cell !== 'object') {
+            return '';
+        }
+        const values = Array.isArray(cell.value) ? cell.value : [];
+        return normalizeMatchingText(values.join(' '));
+    }
+
+    function buildMatchingCellLabels(initialData) {
+        const table = Array.isArray(initialData?.table) ? initialData.table : [];
+        const labels = {};
+        if (table.length === 0) {
+            return labels;
+        }
+
+        const headerRow = Array.isArray(table[0]) ? table[0] : [];
+        table.forEach((row, rowIndex) => {
+            if (!Array.isArray(row) || rowIndex === 0) {
+                return;
+            }
+
+            row.forEach((cell, colIndex) => {
+                if (!cell || typeof cell !== 'object' || cell.isFixed || !cell.id) {
+                    return;
+                }
+
+                const rowFixed = row
+                    .filter((candidate) => candidate && candidate.isFixed)
+                    .map(matchingCellText)
+                    .filter(Boolean);
+                const columnHeader = matchingCellText(headerRow[colIndex]);
+                const parts = [];
+                if (rowFixed.length > 0) {
+                    parts.push(rowFixed.join(' | '));
+                }
+                if (columnHeader) {
+                    parts.push(columnHeader);
+                }
+                labels[String(cell.id)] = parts.join(' / ') || ('Ячейка ' + String(rowIndex + 1) + ':' + String(colIndex + 1));
+            });
+        });
+
+        return labels;
+    }
+
+    function normalizeMatchingAnswerValue(answerValue) {
+        if (!answerValue) {
+            return {};
+        }
+        if (typeof answerValue === 'string') {
+            const parsed = parsePythonishDataLiteral(answerValue);
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        }
+        return typeof answerValue === 'object' ? answerValue : {};
+    }
+
+    function buildMatchingTablePairs(initialData, answerValue, includeCandidates) {
+        const data = initialData && typeof initialData === 'object' ? initialData : {};
+        const answerById = {};
+        (Array.isArray(data.answers) ? data.answers : []).forEach((answer) => {
+            const id = collapseWhitespace(answer?.id || '');
+            const title = normalizeMatchingText(answer?.title || '');
+            if (id && title) {
+                answerById[id] = title;
+            }
+        });
+
+        const cellLabels = buildMatchingCellLabels(data);
+        const answerObject = normalizeMatchingAnswerValue(answerValue);
+        const selectedMap = answerObject && typeof answerObject.answer === 'object'
+            ? answerObject.answer
+            : {};
+
+        const pairs = [];
+        Object.keys(cellLabels).forEach((cellId) => {
+            const selectedIdsRaw = Array.isArray(selectedMap[cellId]) ? selectedMap[cellId] : [];
+            const selectedIds = selectedIdsRaw.map((item) => collapseWhitespace(item)).filter(Boolean);
+            selectedIds.forEach((answerId) => {
+                const answerTitle = answerById[answerId] || answerId;
+                pairs.push({
+                    cellId,
+                    answerId,
+                    cellLabel: cellLabels[cellId],
+                    answerTitle,
+                    answerText: cellLabels[cellId] + ': ' + answerTitle,
+                    selected: true
+                });
+            });
+
+            if (includeCandidates && selectedIds.length === 0) {
+                Object.keys(answerById).forEach((answerId) => {
+                    pairs.push({
+                        cellId,
+                        answerId,
+                        cellLabel: cellLabels[cellId],
+                        answerTitle: answerById[answerId],
+                        answerText: cellLabels[cellId] + ': ' + answerById[answerId],
+                        selected: false
+                    });
+                });
+            }
+        });
+
+        return pairs;
+    }
+
     function matchesQuestionReference(candidate, reference) {
         if (!candidate || !reference) {
             return false;
@@ -208,7 +386,10 @@
         buildQuestionFingerprint,
         buildStableQuestionKeyBase,
         matchesQuestionReference,
-        shouldRetainRenderedAnswers
+        shouldRetainRenderedAnswers,
+        parsePythonishDataLiteral,
+        normalizeMatchingText,
+        buildMatchingTablePairs
     };
 
     if (typeof module !== 'undefined' && module.exports) {

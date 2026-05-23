@@ -1,0 +1,64 @@
+{% extends "admin_base.html" %}
+{% block title %}Тест{% endblock %}
+{% block page_title %}Тест{% endblock %}
+{% block content %}
+<div class="section-head">
+    <h2 class="cell-wrap">{{ data.test.title or data.test.path }}</h2>
+    <a class="btn btn-secondary" href="/admin/tests">Назад</a>
+</div>
+<p class="text-muted">{{ data.test.host }}{{ data.test.path }}</p>
+
+<section class="cards">
+    <article class="card"><p>Вопросов</p><h3>{{ data.counters.questions_count }}</h3></article>
+    <article class="card"><p>Завершений</p><h3>{{ data.counters.completed_count }}</h3></article>
+    <article class="card"><p>Попыток</p><h3>{{ data.counters.attempts_count }}</h3></article>
+    <article class="card"><p>Пользователей</p><h3>{{ data.counters.unique_users }}</h3></article>
+</section>
+
+<div class="grid-2">
+    <section class="panel">
+        <div class="panel-head"><h2>Вопросы</h2></div>
+        <table>
+            <thead><tr><th>Вопрос</th><th>Завершений</th><th>Ответов</th><th>Подтв.</th><th>Выборов</th></tr></thead>
+            <tbody>
+            {% for q in data.questions %}
+                <tr>
+                    <td class="cell-wrap">{{ q.prompt or q.question_key }}<div class="text-muted">{{ q.updated_at.strftime('%d.%m.%Y %H:%M') if q.updated_at else '-' }}</div></td>
+                    <td>{{ q.completed_count }}</td>
+                    <td>{{ q.answers_count }}</td>
+                    <td>{{ q.verified_count }}</td>
+                    <td>{{ q.fallback_count }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="5" class="empty">Вопросов пока нет.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% if data.total_questions > page_size %}
+        <div class="pagination">
+            {% for p in range(1, (data.total_questions + page_size - 1) // page_size + 1) %}
+                <a href="/admin/tests/{{ data.test.test_key }}?page={{ p }}" class="{% if p == page %}active{% endif %}">{{ p }}</a>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </section>
+
+    <section class="panel">
+        <div class="panel-head"><h2>Пользователи теста</h2></div>
+        <table>
+            <thead><tr><th>Пользователь</th><th>Вопросов</th><th>Правильных</th></tr></thead>
+            <tbody>
+            {% for u in data.users %}
+                <tr>
+                    <td><a href="/admin/users/{{ u.id }}">{% if u.telegram_username %}@{{ u.telegram_username }}{% else %}{{ u.telegram_id }}{% endif %}</a><div class="text-muted">{{ u.last_activity_at.strftime('%d.%m.%Y %H:%M') if u.last_activity_at else '-' }}</div></td>
+                    <td>{{ u.questions_count }}</td>
+                    <td>{{ u.completions_count }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="3" class="empty">Пользователей пока нет.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </section>
+</div>
+{% endblock %}

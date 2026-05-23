@@ -42,6 +42,18 @@ app.add_middleware(
     max_age=86400,
 )
 
+
+@app.middleware('http')
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('X-Frame-Options', 'DENY')
+    response.headers.setdefault('Referrer-Policy', 'same-origin')
+    response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+    if request.url.path.startswith('/admin') or request.url.path.startswith('/api/admin'):
+        response.headers.setdefault('Cache-Control', 'no-store')
+    return response
+
 app.include_router(admin_router)
 
 

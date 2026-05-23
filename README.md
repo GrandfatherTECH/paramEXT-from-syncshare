@@ -1,9 +1,14 @@
-# paramEXT — Enhanced SyncShare
+<h1 align="center">
+  <img src="logo_main.png" alt="paramEXT" width="38" height="38" style="vertical-align: middle;">
+  paramEXT — Enhanced SyncShare
+</h1>
 
-![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Available-brightgreen?style=flat-square)
-![Manifest Version](https://img.shields.io/badge/Manifest%20V3-Compatible-blue?style=flat-square)
-![Version](https://img.shields.io/badge/Version-2.9.0-orange?style=flat-square)
-![License](https://img.shields.io/badge/License-MIT%20with%20Attribution-green?style=flat-square)
+<p align="center">
+  <img src="https://img.shields.io/badge/Chrome%20Web%20Store-Available-brightgreen?style=flat-square" alt="Chrome Web Store">
+  <img src="https://img.shields.io/badge/Manifest%20V3-Compatible-blue?style=flat-square" alt="Manifest Version">
+  <img src="https://img.shields.io/badge/Version-2.9.0-orange?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/License-MIT%20with%20Attribution-green?style=flat-square" alt="License">
+</p>
 
 > **paramEXT** — расширенная версия SyncShare для автоматизации тестов на **Moodle** и **OpenEdu**.
 
@@ -35,6 +40,7 @@
 - Резервная статистика (как в Moodle)
 - Настраиваемая задержка авто-перехода
 - Горячие клавиши для показа/скрытия палочки
+- Поддержка обычных вопросов, текстовых полей, медиа-вариантов и MatchingTable-задач OpenEdu
 
 ---
 
@@ -46,6 +52,7 @@
 
 ```bash
 git clone https://github.com/KOSFin/paramEXT-from-syncshare.git
+cd paramEXT-from-syncshare
 ```
 
 **Вариант Б — ZIP-архив:**
@@ -63,6 +70,26 @@ git clone https://github.com/KOSFin/paramEXT-from-syncshare.git
 5. Готово — иконка paramEXT появится на панели расширений
 
 > **Примечание:** paramEXT автоматически заменит оригинальное расширение SyncShare, если оно установлено, так как оба используют одинаковые ключи Chrome. Весь функционал SyncShare сохраняется.
+
+---
+
+## Обновление
+
+Если расширение скачано через Git, обновите его одной командой:
+
+```bash
+./scripts/update.sh
+```
+
+Или вручную:
+
+```bash
+git pull --ff-only
+```
+
+После обновления откройте `chrome://extensions/` и нажмите кнопку обновления у paramEXT.
+
+Если расширение скачано ZIP-архивом, скачайте новый ZIP и замените старую папку. Если вы запускали свой бэкенд, сохраните `.env` перед заменой.
 
 ---
 
@@ -109,6 +136,30 @@ Moodle работает сразу после установки без допо
 
 ---
 
+## Бэкенд и админ-панель
+
+Для запуска своего OpenEdu-бэкенда:
+
+```bash
+cp env.example .env
+docker compose up -d --build
+```
+
+В `.env` обязательно поменяйте:
+
+```dotenv
+POSTGRES_PASSWORD=change_me_postgres
+API_TOKEN=change_me_api_token
+ADMIN_TOKEN=change_me_admin_password
+ADMIN_SECRET_KEY=change_me_long_random_secret
+TELEGRAM_BOT_TOKEN=123456:telegram_bot_token
+BOT_LINK=https://t.me/paramext_bot
+```
+
+Админ-панель открывается по адресу `/admin`. Вход теперь работает через форму и cookie-сессию: токен администратора больше не нужно передавать в URL. В панели доступны обзор, пользователи, статистика, тесты и вопросы.
+
+---
+
 ## Команды Telegram-бота
 
 | Команда | Описание |
@@ -134,15 +185,17 @@ Moodle работает сразу после установки без допо
 
 ## Структура проекта
 
-```
+```text
 paramEXT/
   manifest.json          — конфигурация расширения (Manifest V3)
   env.example            — пример переменных окружения
+  scripts/update.sh      — удобное обновление через Git
   js/
     popup_new.js         — логика popup-окна расширения
     platform_settings.js — управление настройками
     content_logic.js     — контент-скрипт для Moodle
     openedu_content.js   — контент-скрипт для OpenEdu
+    openedu_shared.js    — общие функции OpenEdu
     background_worker.js — фоновый Service Worker
     commons.js           — общие утилиты
     quiz_attempt.js      — обработка попыток Moodle
@@ -162,16 +215,19 @@ paramEXT/
 
 ## FAQ
 
-**В: Расширение не показывает ответы на OpenEdu**
+**В: Расширение не показывает ответы на OpenEdu**  
 О: Проверьте, что вы зарегистрированы в [@paramext_bot](https://t.me/paramext_bot), токен вставлен в настройках API, и статус API — «Онлайн».
 
-**В: Кнопки палочки не появляются**
+**В: Кнопки палочки не появляются**  
 О: Убедитесь, что вы находитесь на странице теста. Попробуйте обновить страницу. Проверьте, что палочка не скрыта горячей клавишей.
 
-**В: Как вернуться на оригинальный SyncShare?**
+**В: Как обновить расширение?**  
+О: Если скачивали через Git, выполните `./scripts/update.sh`, затем обновите расширение в `chrome://extensions/`.
+
+**В: Как вернуться на оригинальный SyncShare?**  
 О: Удалите paramEXT из `chrome://extensions/` и установите [SyncShare из Chrome Web Store](https://chromewebstore.google.com/detail/syncshare/lngijbnmdkejbgnkakeiapeppbpaapib?hl=ru&utm_source=ext_sidebar).
 
-**В: Авто-прорешивание не переходит на следующую страницу (Moodle)**
+**В: Авто-прорешивание не переходит на следующую страницу (Moodle)**  
 О: Проверьте, что текст кнопки «Далее» в настройках совпадает с текстом на странице (по умолчанию «Следующая страница»).
 
 ---

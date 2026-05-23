@@ -147,3 +147,30 @@ test('shouldRetainRenderedAnswers clears UI when page is truly empty for long en
 
     assert.equal(keepUi, false);
 });
+
+test('parsePythonishDataLiteral reads OpenEdu advanced component payloads', () => {
+    const parsed = openeduShared.parsePythonishDataLiteral("{'ok': True, 'title': '\\u0424\\u0430\\u043b\\u0435\\u0441', 'items': [None, {'id': 'a'}]}");
+
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.title, 'Фалес');
+    assert.equal(parsed.items[0], null);
+    assert.equal(parsed.items[1].id, 'a');
+});
+
+test('buildMatchingTablePairs converts MatchingTableVueApp state into stable answer texts', () => {
+    const initialData = openeduShared.parsePythonishDataLiteral(
+        "{'table': [[{'isFixed': true, 'value': ['__Философ__']}, {'isFixed': true, 'value': ['__Первоначало__']}], [{'isFixed': true, 'value': ['Фалес']}, {'isFixed': false, 'id': 'cell_water'}]], 'answers': [{'id': 'ans_water', 'title': 'вода'}, {'id': 'ans_fire', 'title': 'огонь'}]}"
+    );
+
+    const pairs = openeduShared.buildMatchingTablePairs(
+        initialData,
+        '{"answer":{"cell_water":["ans_water"]}}',
+        true
+    );
+
+    assert.equal(pairs.length, 1);
+    assert.equal(pairs[0].cellId, 'cell_water');
+    assert.equal(pairs[0].answerId, 'ans_water');
+    assert.equal(pairs[0].answerText, 'Фалес / Первоначало: вода');
+    assert.equal(pairs[0].selected, true);
+});
