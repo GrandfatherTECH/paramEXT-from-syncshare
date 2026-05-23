@@ -3,8 +3,8 @@
  * Author: Before Semicolon
  */
 
-.syncshare-cm,
-.syncshare-cm .sub-menu {
+.moodush-cm,
+.moodush-cm .sub-menu {
     position: fixed;
     color: #000;
     background: #fff;
@@ -17,7 +17,7 @@
     margin: 0;
 }
 
-.syncshare-cm .sub-menu {
+.moodush-cm .sub-menu {
     position: absolute;
     top: 0;
     left: 100%;
@@ -29,7 +29,7 @@
     flex-direction: column;
 }
 
-.syncshare-cm .menu-item {
+.moodush-cm .menu-item {
     max-width: 200px;
     min-width: 130px;
     display: flex;
@@ -41,57 +41,57 @@
     transition: 0.2s;
 }
 
-.syncshare-cm .menu-item .item-label {
+.moodush-cm .menu-item .item-label {
     display: block;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-.syncshare-cm .menu-item .postfix,
-.syncshare-cm .sub-menu .menu-item .postfix {
+.moodush-cm .menu-item .postfix,
+.moodush-cm .sub-menu .menu-item .postfix {
     margin: 0 0 0 auto;
     display: flex;
     align-items: center;
     gap: 6px;
 }
 
-.syncshare-cm .menu-item .postfix .content,
-.syncshare-cm .sub-menu .menu-item .postfix .content {
+.moodush-cm .menu-item .postfix .content,
+.moodush-cm .sub-menu .menu-item .postfix .content {
     border-radius: 4px;
     padding: 3px 4px;
     line-height: 1;
 }
 
-.syncshare-cm .menu-item .prefix,
-.syncshare-cm .sub-menu .menu-item .prefix {
+.moodush-cm .menu-item .prefix,
+.moodush-cm .sub-menu .menu-item .prefix {
     margin: 0 8px 0 4px;
     border-radius: 4px;
     line-height: 1;
 }
 
-.syncshare-cm .menu-item:last-of-type {
+.moodush-cm .menu-item:last-of-type {
     border-bottom: none;
 }
 
-.syncshare-cm .menu-item:hover {
+.moodush-cm .menu-item:hover {
     background: #f2f2f2;
 }
 
-.syncshare-cm .menu-item:hover > .sub-menu {
+.moodush-cm .menu-item:hover > .sub-menu {
     display: flex;
 }
 
-.syncshare-cm.left .sub-menu {
+.moodush-cm.left .sub-menu {
     left: 0;
     transform: translateX(-100%);
 }
 
-.syncshare-cm.top .sub-menu {
+.moodush-cm.top .sub-menu {
     top: 100%;
     transform: translateY(-100%);
 }
 
-.syncshare-cm.left.top .sub-menu {
+.moodush-cm.left.top .sub-menu {
     transform: translate(-100%, -100%);
 }

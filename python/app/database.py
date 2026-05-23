@@ -13,7 +13,7 @@ from .config import settings
 _NORM_PUNCT_RE = re.compile(r'[^\w\s]', re.UNICODE)
 _NORM_WS_RE = re.compile(r'\s+')
 _ZERO_WIDTH_RE = re.compile(r'[\u200b-\u200f\ufeff]')
-_QUESTION_UI_RE = re.compile(r'(\|\*\~?\??|\?+\s*(?=paramEXT|Вставить)|похож\.)', re.IGNORECASE)
+_QUESTION_UI_RE = re.compile(r'(\|\*\~?\??|\?+\s*(?=MooDuSh|Вставить)|похож\.)', re.IGNORECASE)
 _TRAILING_COUNT_RE = re.compile(r'(^|\s)\d+(?=\s|$)')
 _QUESTION_UI_PHRASES = sorted(
     [
@@ -32,8 +32,8 @@ _QUESTION_UI_PHRASES = sorted(
         'Показаны данные похожего вопроса.',
         'Похожий вопрос',
         'Этот вопрос',
-        'paramEXT OpenEdu',
-        'paramEXT',
+        'MooDuSh OpenEdu',
+        'MooDuSh',
         'Пока нет ответов.',
         'Ответы',
     ],
@@ -415,7 +415,7 @@ class Database:
                     AND s.question_key = q.question_key
                 WHERE q.prompt != ''
                   AND (
-                    q.prompt ILIKE '%paramEXT%'
+                    q.prompt ILIKE '%MooDuSh%'
                     OR q.prompt ILIKE '%Вставить%'
                     OR q.prompt ILIKE '%Нет статистики%'
                     OR q.prompt ILIKE '%Ответы%'
@@ -467,7 +467,7 @@ class Database:
                 SELECT test_key, question_key, answer_key, answer_text, answer_norm
                 FROM openedu_answer_stats
                 WHERE answer_norm = ''
-                   OR answer_text ILIKE '%paramEXT%'
+                   OR answer_text ILIKE '%MooDuSh%'
                    OR answer_text ILIKE '%Вставить%'
                 ORDER BY updated_at DESC
                 LIMIT $1

@@ -1,20 +1,20 @@
 (function () {
     const HOST_RE = /(^|\.)openedu\.ru$/i;
-    const STICK_ID = 'paramext-openedu-stick';
-    const WAND_TOGGLE_ID = 'paramext-openedu-wand-toggle';
-    const QUESTION_KEY_ATTR = 'data-paramext-openedu-question-key';
-    const INLINE_WAND_ATTR = 'data-paramext-openedu-inline-wand';
-    const INLINE_MENU_CLASS = 'paramext-openedu-inline-menu';
+    const STICK_ID = 'moodush-openedu-stick';
+    const WAND_TOGGLE_ID = 'moodush-openedu-wand-toggle';
+    const QUESTION_KEY_ATTR = 'data-moodush-openedu-question-key';
+    const INLINE_WAND_ATTR = 'data-moodush-openedu-inline-wand';
+    const INLINE_MENU_CLASS = 'moodush-openedu-inline-menu';
     const WAND_VISIBILITY_KEY = 'paramExtOpeneduWandsHidden';
     const QUESTION_INPUT_SELECTOR = 'input[type="radio"], input[type="checkbox"], input[type="text"]';
     const QUESTION_ROOT_SELECTOR = '[data-problem-id], .problem, .xblock-student_view-problem, .problems-wrapper, .wrapper-problem-response, fieldset, [role="group"], .choicegroup, [id^="problem_"]';
     const QUESTION_GROUP_SELECTOR = 'fieldset, .question, .subquestion, .problem-question, .wrapper-problem-response, .choicegroup, .answers, .options, .response, .answer';
     const OPTION_LABEL_SELECTOR = 'label.response-label, label.field-label, .choicegroup label[for], label[for], label';
     const PARAMEXT_WIDGET_SELECTOR = [
-        '.paramext-openedu-inline-menu',
-        '.paramext-openedu-inline-popover',
-        '.paramext-openedu-wand-toggle',
-        '.paramext-openedu-stick',
+        '.moodush-openedu-inline-menu',
+        '.moodush-openedu-inline-popover',
+        '.moodush-openedu-wand-toggle',
+        '.moodush-openedu-stick',
         '[' + INLINE_WAND_ATTR + ']'
     ].join(', ');
     const MAX_ANSWERS_PER_QUESTION = 50;
@@ -321,7 +321,7 @@
         }
 
         try {
-            console.log('[paramEXT OpenEdu][' + (isTopFrame ? 'top' : 'iframe') + '] ' + event, payload || {});
+            console.log('[MooDuSh OpenEdu][' + (isTopFrame ? 'top' : 'iframe') + '] ' + event, payload || {});
         } catch (_) {
             // Ignore console errors.
         }
@@ -950,7 +950,7 @@
         if (!doc || !doc.documentElement) {
             return;
         }
-        doc.documentElement.classList.toggle('paramext-openedu-hide-wands', !visible);
+        doc.documentElement.classList.toggle('moodush-openedu-hide-wands', !visible);
     }
 
     async function persistWandsVisibility(value) {
@@ -2506,9 +2506,9 @@
         if (wandsHidden) {
             return;
         }
-        block.classList.add('paramext-openedu-highlight');
+        block.classList.add('moodush-openedu-highlight');
         setTimeout(() => {
-            block.classList.remove('paramext-openedu-highlight');
+            block.classList.remove('moodush-openedu-highlight');
         }, 1600);
     }
 
@@ -3719,10 +3719,10 @@
 
             const trigger = document.createElement('button');
             trigger.type = 'button';
-            trigger.className = 'paramext-openedu-inline-wand'
-                + (isSimilar ? ' paramext-openedu-inline-wand--similar' : '')
-                + (!hasAnswers ? ' paramext-openedu-inline-wand--empty' : '')
-                + (isContentMatch ? ' paramext-openedu-inline-wand--content' : '');
+            trigger.className = 'moodush-openedu-inline-wand'
+                + (isSimilar ? ' moodush-openedu-inline-wand--similar' : '')
+                + (!hasAnswers ? ' moodush-openedu-inline-wand--empty' : '')
+                + (isContentMatch ? ' moodush-openedu-inline-wand--content' : '');
             trigger.textContent = hasAnswers
                 ? (isSimilar ? '|*~' : '|*')
                 : '|*';
@@ -3739,31 +3739,31 @@
             }
 
             const popover = document.createElement('div');
-            popover.className = 'paramext-openedu-inline-popover';
+            popover.className = 'moodush-openedu-inline-popover';
 
             const popTitle = document.createElement('div');
-            popTitle.className = 'paramext-openedu-inline-title';
-            popTitle.textContent = 'paramEXT';
+            popTitle.className = 'moodush-openedu-inline-title';
+            popTitle.textContent = 'MooDuSh';
             popover.appendChild(popTitle);
 
             let actionsHost = popover;
             if (isSimilar) {
                 const similarNotice = document.createElement('div');
-                similarNotice.className = 'paramext-openedu-inline-similar-notice';
+                similarNotice.className = 'moodush-openedu-inline-similar-notice';
                 similarNotice.textContent = 'Точный ответ для этого вопроса не найден. Показаны данные похожего вопроса.';
                 popover.appendChild(similarNotice);
 
                 const tabs = document.createElement('div');
-                tabs.className = 'paramext-openedu-inline-tabs';
+                tabs.className = 'moodush-openedu-inline-tabs';
 
                 const thisQuestionTab = document.createElement('button');
                 thisQuestionTab.type = 'button';
-                thisQuestionTab.className = 'paramext-openedu-inline-tab';
+                thisQuestionTab.className = 'moodush-openedu-inline-tab';
                 thisQuestionTab.textContent = 'Этот вопрос';
 
                 const similarQuestionTab = document.createElement('button');
                 similarQuestionTab.type = 'button';
-                similarQuestionTab.className = 'paramext-openedu-inline-tab active';
+                similarQuestionTab.className = 'moodush-openedu-inline-tab active';
                 similarQuestionTab.textContent = 'Похожий вопрос';
 
                 tabs.appendChild(thisQuestionTab);
@@ -3771,12 +3771,12 @@
                 popover.appendChild(tabs);
 
                 const thisPane = document.createElement('div');
-                thisPane.className = 'paramext-openedu-inline-tab-pane';
+                thisPane.className = 'moodush-openedu-inline-tab-pane';
                 thisPane.classList.add('hidden');
                 thisPane.textContent = 'Для этого вопроса пока нет своей статистики.';
 
                 const similarPane = document.createElement('div');
-                similarPane.className = 'paramext-openedu-inline-tab-pane';
+                similarPane.className = 'moodush-openedu-inline-tab-pane';
 
                 thisQuestionTab.addEventListener('click', () => {
                     thisQuestionTab.classList.add('active');
@@ -3799,7 +3799,7 @@
 
             const applyVerified = document.createElement('button');
             applyVerified.type = 'button';
-            applyVerified.className = 'paramext-openedu-inline-action';
+            applyVerified.className = 'moodush-openedu-inline-action';
             applyVerified.textContent = isMulti
                 ? (isSimilar ? 'Вставить ответы похожего вопроса' : 'Вставить правильные ответы')
                 : (isSimilar ? 'Вставить ответ похожего вопроса' : 'Вставить правильный ответ');
@@ -3821,7 +3821,7 @@
             if (settings.openedu.showFallbackStats) {
                 const applyFallback = document.createElement('button');
                 applyFallback.type = 'button';
-                applyFallback.className = 'paramext-openedu-inline-action fallback';
+                applyFallback.className = 'moodush-openedu-inline-action fallback';
                 applyFallback.textContent = isMulti
                     ? (isSimilar ? 'Вставить популярные ответы похожего вопроса' : 'Вставить популярные ответы')
                     : (isSimilar ? 'Вставить популярный ответ похожего вопроса' : 'Вставить популярный ответ');
@@ -3842,28 +3842,28 @@
             }
 
             const list = document.createElement('ul');
-            list.className = 'paramext-openedu-inline-stats';
+            list.className = 'moodush-openedu-inline-stats';
 
             const allAnswers = mergeAndSortAnswers(verifiedAnswers, fallbackAnswers);
 
             if (allAnswers.length === 0) {
                 const empty = document.createElement('li');
-                empty.className = 'paramext-openedu-inline-empty';
+                empty.className = 'moodush-openedu-inline-empty';
                 empty.textContent = isSimilar ? 'Нет точных ответов, только похожие данные.' : 'Нет статистики по этому вопросу.';
                 list.appendChild(empty);
             } else {
                 const sectionHeader = document.createElement('li');
-                sectionHeader.className = 'paramext-openedu-inline-section';
+                sectionHeader.className = 'moodush-openedu-inline-section';
                 sectionHeader.textContent = 'Ответы';
                 list.appendChild(sectionHeader);
 
                 allAnswers.forEach((answer) => {
                     const row = document.createElement('li');
-                    row.className = 'paramext-openedu-inline-row';
+                    row.className = 'moodush-openedu-inline-row';
 
                     const answerBtn = document.createElement('button');
                     answerBtn.type = 'button';
-                    answerBtn.className = 'paramext-openedu-inline-answer';
+                    answerBtn.className = 'moodush-openedu-inline-answer';
                     answerBtn.textContent = answer.isVerified ? (answer.answerText + ' ✓') : answer.answerText;
                     answerBtn.title = 'Вставить этот вариант';
                     answerBtn.addEventListener('click', () => {
@@ -3880,11 +3880,11 @@
                     row.appendChild(answerBtn);
 
                     const countsContainer = document.createElement('div');
-                    countsContainer.className = 'paramext-openedu-inline-counts';
+                    countsContainer.className = 'moodush-openedu-inline-counts';
 
                     if (answer.isVerified) {
                         const vCount = document.createElement('span');
-                        vCount.className = 'paramext-openedu-inline-count verified';
+                        vCount.className = 'moodush-openedu-inline-count verified';
                         vCount.textContent = answer.verifiedCount > 0 ? answer.verifiedCount : '✓';
                         vCount.title = answer.verifiedCount > 0
                             ? 'Подтверждено платформой: ' + answer.verifiedCount + ' раз'
@@ -3893,7 +3893,7 @@
                     }
 
                     const fCount = document.createElement('span');
-                    fCount.className = 'paramext-openedu-inline-count fallback';
+                    fCount.className = 'moodush-openedu-inline-count fallback';
                     fCount.textContent = answer.fallbackCount;
                     fCount.title = 'Выбирали: ' + answer.fallbackCount + ' раз';
                     countsContainer.appendChild(fCount);
@@ -3908,7 +3908,7 @@
             menu.appendChild(trigger);
             if (isSimilar) {
                 const sourceMark = document.createElement('span');
-                sourceMark.className = 'paramext-openedu-inline-source-mark';
+                sourceMark.className = 'moodush-openedu-inline-source-mark';
                 sourceMark.textContent = 'похож.';
                 sourceMark.title = 'Данные не из этого вопроса, а из похожего';
                 menu.appendChild(sourceMark);
@@ -3983,18 +3983,18 @@
 
     function buildQuestionCard(question, index, stats) {
         const card = document.createElement('div');
-        card.className = 'paramext-question-card';
+        card.className = 'moodush-question-card';
         card.dataset.answerState = getQuestionStatsKind(stats);
 
         const head = document.createElement('div');
-        head.className = 'paramext-question-head';
+        head.className = 'moodush-question-head';
 
         const title = document.createElement('p');
-        title.className = 'paramext-question-name';
+        title.className = 'moodush-question-name';
         title.textContent = 'Вопрос ' + (index + 1);
 
         const meta = document.createElement('p');
-        meta.className = 'paramext-question-meta paramext-question-meta--' + getQuestionStatsKind(stats);
+        meta.className = 'moodush-question-meta moodush-question-meta--' + getQuestionStatsKind(stats);
         meta.textContent = buildQuestionStatusLabel(stats);
 
         head.appendChild(title);
@@ -4002,12 +4002,12 @@
         card.appendChild(head);
 
         const prompt = document.createElement('p');
-        prompt.className = 'paramext-question-prompt';
+        prompt.className = 'moodush-question-prompt';
         prompt.textContent = collapseWhitespace(question?.prompt || '') || 'Без текста вопроса';
         card.appendChild(prompt);
 
         const list = document.createElement('ul');
-        list.className = 'paramext-answer-list';
+        list.className = 'moodush-answer-list';
 
         const verifiedAnswers = normalizeAnswerStatsList(stats.verifiedAnswers);
         const selectedAnswers = normalizeAnswerStatsList(stats.fallbackAnswers);
@@ -4015,26 +4015,26 @@
 
         if (allAnswers.length === 0) {
             const emptyItem = document.createElement('li');
-            emptyItem.className = 'paramext-answer-item paramext-answer-item--empty';
+            emptyItem.className = 'moodush-answer-item moodush-answer-item--empty';
             emptyItem.textContent = 'Ответов пока нет';
             list.appendChild(emptyItem);
         }
 
         allAnswers.slice(0, 6).forEach((answer) => {
             const item = document.createElement('li');
-            item.className = 'paramext-answer-item';
+            item.className = 'moodush-answer-item';
 
             const text = document.createElement('span');
-            text.className = 'paramext-answer-text';
+            text.className = 'moodush-answer-text';
             text.textContent = answer.isVerified ? (answer.answerText + ' ✓') : answer.answerText;
             item.appendChild(text);
 
             const countsContainer = document.createElement('div');
-            countsContainer.className = 'paramext-answer-counts';
+            countsContainer.className = 'moodush-answer-counts';
 
             if (answer.isVerified) {
                 const vCount = document.createElement('span');
-                vCount.className = 'paramext-answer-count verified';
+                vCount.className = 'moodush-answer-count verified';
                 vCount.textContent = answer.verifiedCount > 0
                     ? answer.verifiedCount + ' подтв.'
                     : 'подтв.';
@@ -4042,7 +4042,7 @@
             }
 
             const fCount = document.createElement('span');
-            fCount.className = 'paramext-answer-count fallback';
+            fCount.className = 'moodush-answer-count fallback';
             fCount.textContent = answer.fallbackCount + ' отв.';
             countsContainer.appendChild(fCount);
 
@@ -4052,7 +4052,7 @@
 
         if (allAnswers.length > 6) {
             const moreItem = document.createElement('li');
-            moreItem.className = 'paramext-answer-more';
+            moreItem.className = 'moodush-answer-more';
             moreItem.textContent = 'Еще ' + String(allAnswers.length - 6);
             list.appendChild(moreItem);
         }
@@ -4062,10 +4062,10 @@
         const topAnswer = allAnswers[0] || null;
         const isMulti = Boolean(question?.allowsMultipleAnswers);
         const controls = document.createElement('div');
-        controls.className = 'paramext-question-controls';
+        controls.className = 'moodush-question-controls';
 
         const focusBtn = document.createElement('button');
-        focusBtn.className = 'paramext-focus-btn';
+        focusBtn.className = 'moodush-focus-btn';
         focusBtn.type = 'button';
         focusBtn.textContent = 'К вопросу';
         focusBtn.addEventListener('click', () => {
@@ -4074,7 +4074,7 @@
         controls.appendChild(focusBtn);
 
         const applyBtn = document.createElement('button');
-        applyBtn.className = 'paramext-apply-btn';
+        applyBtn.className = 'moodush-apply-btn';
         applyBtn.textContent = isMulti
             ? ((topAnswer && topAnswer.isVerified) ? 'Применить правильные' : 'Применить популярные')
             : ((topAnswer && topAnswer.isVerified) ? 'Применить правильный' : 'Применить популярный');
@@ -4113,7 +4113,7 @@
 
         if (!Array.isArray(questions) || questions.length === 0) {
             const emptyState = document.createElement('div');
-            emptyState.className = 'paramext-stick-empty';
+            emptyState.className = 'moodush-stick-empty';
             emptyState.textContent = 'Вопросы на странице пока не найдены.';
             stickBody.appendChild(emptyState);
             return;
@@ -4129,16 +4129,16 @@
         const similarCount = items.filter((item) => item.kind === 'similar').length;
 
         const summary = document.createElement('div');
-        summary.className = 'paramext-stick-summary';
+        summary.className = 'moodush-stick-summary';
         summary.textContent = 'Вопросов: ' + String(items.length)
             + ' · с ответами: ' + String(answerCount)
             + ' · без ответа: ' + String(missingCount);
         stickBody.appendChild(summary);
 
         const filters = document.createElement('div');
-        filters.className = 'paramext-stick-tabs';
+        filters.className = 'moodush-stick-tabs';
         const list = document.createElement('div');
-        list.className = 'paramext-stick-question-list';
+        list.className = 'moodush-stick-question-list';
 
         const filterDefs = [
             { id: 'all', label: 'Все', count: items.length },
@@ -4152,7 +4152,7 @@
             filterButtons.forEach((button) => {
                 button.classList.toggle('active', button.dataset.filterId === filterId);
             });
-            list.querySelectorAll('.paramext-question-card').forEach((card) => {
+            list.querySelectorAll('.moodush-question-card').forEach((card) => {
                 const state = card.getAttribute('data-answer-state') || '';
                 const visible = filterId === 'all'
                     || (filterId === 'answered' && state !== 'missing')
@@ -4165,7 +4165,7 @@
         filterDefs.forEach((filter) => {
             const button = document.createElement('button');
             button.type = 'button';
-            button.className = 'paramext-stick-tab' + (filter.id === 'all' ? ' active' : '');
+            button.className = 'moodush-stick-tab' + (filter.id === 'all' ? ' active' : '');
             button.dataset.filterId = filter.id;
             button.textContent = filter.label + ' ' + String(filter.count);
             button.disabled = filter.count === 0;
@@ -4225,42 +4225,42 @@
         wandToggle = document.createElement('button');
         wandToggle.id = WAND_TOGGLE_ID;
         wandToggle.type = 'button';
-        wandToggle.className = 'paramext-openedu-wand-toggle';
+        wandToggle.className = 'moodush-openedu-wand-toggle';
         wandToggle.textContent = '|*';
-        wandToggle.title = 'paramEXT OpenEdu: показать статистику';
+        wandToggle.title = 'MooDuSh OpenEdu: показать статистику';
         wandToggle.addEventListener('click', () => {
             toggleStick();
         });
 
         stickRoot = document.createElement('aside');
         stickRoot.id = STICK_ID;
-        stickRoot.className = 'paramext-openedu-stick hidden';
+        stickRoot.className = 'moodush-openedu-stick hidden';
 
         const header = document.createElement('div');
-        header.className = 'paramext-stick-header';
+        header.className = 'moodush-stick-header';
 
         const left = document.createElement('div');
         const title = document.createElement('div');
-        title.className = 'paramext-stick-title';
-        title.textContent = 'paramEXT OpenEdu';
+        title.className = 'moodush-stick-title';
+        title.textContent = 'MooDuSh OpenEdu';
         const subtitle = document.createElement('div');
-        subtitle.className = 'paramext-stick-subtitle';
+        subtitle.className = 'moodush-stick-subtitle';
         subtitle.textContent = 'Палочка и проверенные ответы';
         left.appendChild(title);
         left.appendChild(subtitle);
 
         const actions = document.createElement('div');
-        actions.className = 'paramext-stick-actions';
+        actions.className = 'moodush-stick-actions';
 
         statusDot = document.createElement('span');
-        statusDot.className = 'paramext-stick-status';
+        statusDot.className = 'moodush-stick-status';
 
         statusText = document.createElement('span');
-        statusText.className = 'paramext-stick-subtitle';
+        statusText.className = 'moodush-stick-subtitle';
         statusText.textContent = 'API недоступен';
 
         const hideButton = document.createElement('button');
-        hideButton.className = 'paramext-stick-button';
+        hideButton.className = 'moodush-stick-button';
         hideButton.type = 'button';
         hideButton.textContent = 'Скрыть';
         hideButton.addEventListener('click', () => {
@@ -4275,7 +4275,7 @@
         header.appendChild(actions);
 
         stickBody = document.createElement('div');
-        stickBody.className = 'paramext-stick-content';
+        stickBody.className = 'moodush-stick-content';
 
         stickRoot.appendChild(header);
         stickRoot.appendChild(stickBody);

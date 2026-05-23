@@ -1,6 +1,6 @@
 MIT License with Attribution
 
-Copyright © 2025 paramEXT Contributors
+Copyright © 2025 MooDuSh Contributors
 Based on SyncShare by Naloaty
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -19,7 +19,7 @@ furnished to do so, subject to the following conditions:
    a) Retain clear and visible attribution to the original SyncShare project
       (https://chromewebstore.google.com/detail/syncshare/lngijbnmdkejbgnkakeiapeppbpaapib)
    
-   b) Retain clear and visible attribution to paramEXT contributors
+   b) Retain clear and visible attribution to MooDuSh contributors
    
    c) If modifications were made, include a clear notice of what was changed
       and maintain this license in the modified version
@@ -33,7 +33,7 @@ furnished to do so, subject to the following conditions:
    
    b) You must include this license with all distributions
    
-   c) You must maintain attribution to both SyncShare and paramEXT
+   c) You must maintain attribution to both SyncShare and MooDuSh
    
    d) Any modifications must also be released under this same license
       (or a compatible copyleft license)
@@ -45,9 +45,9 @@ furnished to do so, subject to the following conditions:
    
    b) Claim that you created the original SyncShare
    
-   c) Claim that you created paramEXT (if you haven't contributed to it)
+   c) Claim that you created MooDuSh (if you haven't contributed to it)
    
-   d) Use the names "SyncShare" or "paramEXT" for your own products
+   d) Use the names "SyncShare" or "MooDuSh" for your own products
       without clear distinction and attribution
 
 5. THE SOFTWARE IS PROVIDED "AS IS":
@@ -89,9 +89,9 @@ When distributing or modifying this software, include attribution like:
 ### ✅ CORRECT ATTRIBUTION:
 
 ```
-paramEXT - Enhanced SyncShare
+MooDuSh - Enhanced SyncShare
 Based on SyncShare by Naloaty
-https://github.com/yourname/paramEXT
+https://github.com/yourname/MooDuSh
 
 This software is based on SyncShare 
 (https://chromewebstore.google.com/detail/syncshare/lngijbnmdkejbgnkakeiapeppbpaapib)
@@ -107,27 +107,27 @@ See LICENSE file for full details.
 ### ❌ INCORRECT ATTRIBUTION:
 
 ```
-❌ "paramEXT - My Original Extension"
+❌ "MooDuSh - My Original Extension"
 ❌ "SyncShare Enhanced Edition"
 ❌ "My Super Smart Quiz Solver"
-(without mentioning SyncShare or paramEXT)
+(without mentioning SyncShare or MooDuSh)
 ```
 
 ---
 
 ## HOW TO COMPLY WITH THIS LICENSE
 
-1. If you use paramEXT as-is:
+1. If you use MooDuSh as-is:
    - Include this LICENSE file
    - Include attribution in README.md or documentation
 
-2. If you modify paramEXT:
+2. If you modify MooDuSh:
    - Include this LICENSE file
    - Document your changes
-   - Maintain attribution to SyncShare and paramEXT
+   - Maintain attribution to SyncShare and MooDuSh
    - Publish modifications under this license
 
-3. If you distribute paramEXT:
+3. If you distribute MooDuSh:
    - Include this LICENSE file
    - Include this complete license text
    - Maintain all copyright notices

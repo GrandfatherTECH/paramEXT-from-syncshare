@@ -18,7 +18,7 @@ async def forward_log_to_telegram(kind: str, payload: dict, system: dict) -> Non
         return
 
     text = (
-        f"paramEXT log: {kind}\n"
+        f"MooDuSh log: {kind}\n"
         f"scope: {system.get('scope', 'unknown')}\n"
         f"url: {system.get('url', 'n/a')}\n"
         f"payload: {str(payload)[:2500]}"

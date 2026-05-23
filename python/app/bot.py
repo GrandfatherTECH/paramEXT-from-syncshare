@@ -42,10 +42,10 @@ async def cmd_start(message: Message) -> None:
 
     token = user['api_token']
     await message.answer(
-        f"Добро пожаловать в paramEXT!\n\n"
+        f"Добро пожаловать в MooDuSh!\n\n"
         f"Ваш персональный токен:\n<code>{token}</code>\n\n"
         f"<b>Как настроить:</b>\n"
-        f"1. Откройте расширение paramEXT\n"
+        f"1. Откройте расширение MooDuSh\n"
         f"2. Нажмите на раздел «Настройки API» внизу страницы\n"
         f"3. Перейдите в раздел OpenEdu\n"
         f"4. Вставьте токен в поле «Bearer токен»\n"
@@ -105,14 +105,14 @@ async def cmd_stats(message: Message) -> None:
 @router.message(Command('help'))
 async def cmd_help(message: Message) -> None:
     await message.answer(
-        "<b>paramEXT — расширение для OpenEdu</b>\n\n"
+        "<b>MooDuSh — расширение для OpenEdu</b>\n\n"
         "<b>Команды:</b>\n"
         "/start — Регистрация и получение токена\n"
         "/token — Показать текущий токен\n"
         "/stats — Ваша статистика\n"
         "/help — Эта справка\n\n"
         "<b>Настройка расширения:</b>\n"
-        "1. Установите расширение paramEXT\n"
+        "1. Установите расширение MooDuSh\n"
         "2. Откройте popup расширения\n"
         "3. Разверните раздел «Бэкенд»\n"
         "4. В поле «Bearer токен» вставьте токен из /token\n"

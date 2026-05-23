@@ -1,6 +1,6 @@
 (function (global) {
     const MAX_QUEUE_SIZE = 20;
-    const RECOVERY_FLAG_KEY = '__paramext_context_recovery_ts';
+    const RECOVERY_FLAG_KEY = '__moodush_context_recovery_ts';
     const AUTH_BLOCK_MS = 120000;
     const ERROR_BLOCK_MS = 15000;
     const installedHandlerScopes = new Set();
@@ -64,7 +64,7 @@
         }
 
         try {
-            console.warn('[paramEXT] Extension context invalidated, reloading tab...', {
+            console.warn('[MooDuSh] Extension context invalidated, reloading tab...', {
                 scope,
                 source
             });

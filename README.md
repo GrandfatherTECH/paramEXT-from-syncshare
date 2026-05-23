@@ -1,6 +1,6 @@
 <h1 align="center">
-  <img src="logo_main.png" alt="paramEXT" width="38" height="38" style="vertical-align: middle;">
-  paramEXT — Enhanced SyncShare
+  <img src="logo_main.png" alt="MooDuSh" width="38" height="38" style="vertical-align: middle;">
+  MooDuSh — Enhanced SyncShare
 </h1>
 
 <p align="center">
@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/License-MIT%20with%20Attribution-green?style=flat-square" alt="License">
 </p>
 
-> **paramEXT** — расширенная версия SyncShare для автоматизации тестов на **Moodle** и **OpenEdu**.
+> **MooDuSh** — расширенная версия SyncShare для автоматизации тестов на **Moodle** и **OpenEdu**.
 
 ---
 
@@ -52,8 +52,8 @@
 **Вариант А — через Git:**
 
 ```bash
-git clone https://github.com/KOSFin/paramEXT-from-syncshare.git
-cd paramEXT-from-syncshare
+git clone https://github.com/KOSFin/MooDuSh-from-syncshare.git
+cd MooDuSh-from-syncshare
 ```
 
 **Вариант Б — ZIP-архив:**
@@ -67,10 +67,10 @@ cd paramEXT-from-syncshare
 1. Откройте `chrome://extensions/`
 2. Включите **Режим разработчика** (переключатель в правом верхнем углу)
 3. Нажмите **Загрузить распакованное расширение**
-4. Выберите папку с файлами paramEXT (где лежит `manifest.json`)
-5. Готово — иконка paramEXT появится на панели расширений
+4. Выберите папку с файлами MooDuSh (где лежит `manifest.json`)
+5. Готово — иконка MooDuSh появится на панели расширений
 
-> **Примечание:** paramEXT автоматически заменит оригинальное расширение SyncShare, если оно установлено, так как оба используют одинаковые ключи Chrome. Весь функционал SyncShare сохраняется.
+> **Примечание:** MooDuSh автоматически заменит оригинальное расширение SyncShare, если оно установлено, так как оба используют одинаковые ключи Chrome. Весь функционал SyncShare сохраняется.
 
 ---
 
@@ -88,7 +88,7 @@ cd paramEXT-from-syncshare
 git pull --ff-only
 ```
 
-После обновления откройте `chrome://extensions/` и нажмите кнопку обновления у paramEXT.
+После обновления откройте `chrome://extensions/` и нажмите кнопку обновления у MooDuSh.
 
 Если расширение скачано ZIP-архивом, скачайте новый ZIP и замените старую папку. Если вы запускали свой бэкенд, сохраните `.env` перед заменой.
 
@@ -100,13 +100,13 @@ git pull --ff-only
 
 ### Шаг 1: Зарегистрируйтесь в боте
 
-1. Откройте Telegram-бота: **[@paramext_bot](https://t.me/paramext_bot)**
+1. Откройте Telegram-бота: **[@moodush_bot](https://t.me/moodush_bot)**
 2. Нажмите **Start** или отправьте команду `/start`
 3. Бот ответит сообщением с вашим персональным токеном — скопируйте его
 
 ### Шаг 2: Настройте расширение
 
-1. Нажмите на иконку paramEXT на панели расширений Chrome
+1. Нажмите на иконку MooDuSh на панели расширений Chrome
 2. Переключитесь на вкладку **OpenEdu**
 3. Внизу нажмите кнопку **Настройки API**
 4. Перейдите на вкладку **API OpenEdu**
@@ -126,7 +126,7 @@ git pull --ff-only
 
 Moodle работает сразу после установки без дополнительной настройки токена.
 
-1. Нажмите на иконку paramEXT
+1. Нажмите на иконку MooDuSh
 2. Убедитесь, что выбрана вкладка **Moodle**
 3. Выберите режим:
    - **Палочка** — кнопка рядом с каждым вопросом (по умолчанию)
@@ -154,7 +154,7 @@ API_TOKEN=change_me_api_token
 ADMIN_TOKEN=change_me_admin_password
 ADMIN_SECRET_KEY=change_me_long_random_secret
 TELEGRAM_BOT_TOKEN=123456:telegram_bot_token
-BOT_LINK=https://t.me/paramext_bot
+BOT_LINK=https://t.me/moodush_bot
 ```
 
 Админ-панель открывается по адресу `/admin`. Вход теперь работает через форму и cookie-сессию: токен администратора больше не нужно передавать в URL. В панели доступны обзор, пользователи, статистика, тесты и вопросы.
@@ -176,7 +176,7 @@ BOT_LINK=https://t.me/paramext_bot
 
 В разделе **Настройки API** (кнопка внизу popup) можно настроить подключение к бэкенду отдельно для Moodle и OpenEdu:
 
-- **Адрес API** — URL сервера (по умолчанию `https://syncshare.naloaty.me/api` для Moodle, `https://paramext.ruka.me/api` для OpenEdu)
+- **Адрес API** — URL сервера (по умолчанию `https://syncshare.naloaty.me/api` для Moodle, `https://moodush.ruka.me/api` для OpenEdu)
 - **Bearer токен** — персональный токен из Telegram-бота
 - **Таймаут запросов** — время ожидания ответа от сервера в миллисекундах
 - **Проверить API** — проверка доступности сервера
@@ -187,7 +187,7 @@ BOT_LINK=https://t.me/paramext_bot
 ## Структура проекта
 
 ```text
-paramEXT/
+MooDuSh/
   manifest.json          — конфигурация расширения (Manifest V3)
   env.example            — пример переменных окружения
   scripts/update.sh      — удобное обновление через Git
@@ -217,7 +217,7 @@ paramEXT/
 ## FAQ
 
 **В: Расширение не показывает ответы на OpenEdu**  
-О: Проверьте, что вы зарегистрированы в [@paramext_bot](https://t.me/paramext_bot), токен вставлен в настройках API, и статус API — «Онлайн».
+О: Проверьте, что вы зарегистрированы в [@moodush_bot](https://t.me/moodush_bot), токен вставлен в настройках API, и статус API — «Онлайн».
 
 **В: Кнопки палочки не появляются**  
 О: Убедитесь, что вы находитесь на странице теста. Попробуйте обновить страницу. Проверьте, что палочка не скрыта горячей клавишей.
@@ -226,7 +226,7 @@ paramEXT/
 О: Если скачивали через Git, выполните `./scripts/update.sh`, затем обновите расширение в `chrome://extensions/`.
 
 **В: Как вернуться на оригинальный SyncShare?**  
-О: Удалите paramEXT из `chrome://extensions/` и установите [SyncShare из Chrome Web Store](https://chromewebstore.google.com/detail/syncshare/lngijbnmdkejbgnkakeiapeppbpaapib?hl=ru&utm_source=ext_sidebar).
+О: Удалите MooDuSh из `chrome://extensions/` и установите [SyncShare из Chrome Web Store](https://chromewebstore.google.com/detail/syncshare/lngijbnmdkejbgnkakeiapeppbpaapib?hl=ru&utm_source=ext_sidebar).
 
 **В: Авто-прорешивание не переходит на следующую страницу (Moodle)**  
 О: Проверьте, что текст кнопки «Далее» в настройках совпадает с текстом на странице (по умолчанию «Следующая страница»).
@@ -237,7 +237,7 @@ paramEXT/
 
 Если что-то не работает или есть идеи по улучшению — создайте issue в репозитории:
 
-**[GitHub Issues](https://github.com/KOSFin/paramEXT-from-syncshare/issues)**
+**[GitHub Issues](https://github.com/KOSFin/MooDuSh-from-syncshare/issues)**
 
 Пожалуйста, опишите:
 - Что именно не работает
@@ -250,7 +250,7 @@ paramEXT/
 
 <div align="center">
 
-**Made with ❤️ by paramEXT contributors**
+**Made with ❤️ by MooDuSh contributors**
 
 [Оригинальный SyncShare](https://chromewebstore.google.com/detail/syncshare/lngijbnmdkejbgnkakeiapeppbpaapib?hl=ru&utm_source=ext_sidebar)
 

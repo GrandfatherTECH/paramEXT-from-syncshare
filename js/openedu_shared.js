@@ -38,13 +38,13 @@
         'Показаны данные похожего вопроса.',
         'Похожий вопрос',
         'Этот вопрос',
-        'paramEXT OpenEdu',
-        'paramEXT',
+        'MooDuSh OpenEdu',
+        'MooDuSh',
         'Пока нет ответов.',
         'Ответы'
     ].sort((a, b) => b.length - a.length);
 
-    const QUESTION_UI_RE = /(\|\*\~?\??|\?+\s*(?=paramEXT|Вставить)|похож\.)/gi;
+    const QUESTION_UI_RE = /(\|\*\~?\??|\?+\s*(?=MooDuSh|Вставить)|похож\.)/gi;
 
     function containsQuestionUiArtifact(value) {
         const text = String(value || '');

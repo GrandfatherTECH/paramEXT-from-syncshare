@@ -35,7 +35,7 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        'https://paramext.ruka.me',
+        'https://moodush.ruka.me',
         'https://syncshare.naloaty.me',
         'https://syncshare.ru',
     ],
