@@ -264,8 +264,25 @@
             .sort();
     }
 
+    function decodeHtmlEntities(source) {
+        let value = String(source || '');
+        for (let i = 0; i < 2; i += 1) {
+            const next = value
+                .replace(/&quot;/g, '"')
+                .replace(/&#34;/g, '"')
+                .replace(/&apos;/g, "'")
+                .replace(/&#39;/g, "'")
+                .replace(/&amp;/g, '&');
+            if (next === value) {
+                break;
+            }
+            value = next;
+        }
+        return value;
+    }
+
     function parsePythonishDataLiteral(source) {
-        const raw = String(source || '').trim();
+        const raw = decodeHtmlEntities(String(source || '').trim());
         if (!raw) {
             return null;
         }
@@ -352,8 +369,13 @@
         }
 
         const headerRow = Array.isArray(table[0]) ? table[0] : [];
+        const hasHeaderRow = headerRow.length > 0
+            && !headerRow.some((cell) => cell && !cell.isFixed && cell.id);
+        const headerCells = hasHeaderRow ? headerRow : [];
+        const startIndex = hasHeaderRow ? 1 : 0;
+
         table.forEach((row, rowIndex) => {
-            if (!Array.isArray(row) || rowIndex === 0) {
+            if (!Array.isArray(row) || rowIndex < startIndex) {
                 return;
             }
 
@@ -366,7 +388,9 @@
                     .filter((candidate) => candidate && candidate.isFixed)
                     .map(matchingCellText)
                     .filter(Boolean);
-                const columnHeader = matchingCellText(headerRow[colIndex]);
+                const columnHeader = headerCells.length > 0
+                    ? matchingCellText(headerCells[colIndex])
+                    : '';
                 const parts = [];
                 if (rowFixed.length > 0) {
                     parts.push(rowFixed.join(' | '));

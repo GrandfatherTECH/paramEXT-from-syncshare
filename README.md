@@ -176,7 +176,7 @@ BOT_LINK=https://t.me/moodush_bot
 
 В разделе **Настройки API** (кнопка внизу popup) можно настроить подключение к бэкенду отдельно для Moodle и OpenEdu:
 
-- **Адрес API** — URL сервера (по умолчанию `https://syncshare.naloaty.me/api` для Moodle, `https://moodush.ruka.me/api` для OpenEdu)
+- **Адрес API** — URL сервера (по умолчанию `https://syncshare.naloaty.me/api` для Moodle, `https://paramext.ruka.me/api` для OpenEdu)
 - **Bearer токен** — персональный токен из Telegram-бота
 - **Таймаут запросов** — время ожидания ответа от сервера в миллисекундах
 - **Проверить API** — проверка доступности сервера

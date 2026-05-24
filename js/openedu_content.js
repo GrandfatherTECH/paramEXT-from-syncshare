@@ -6,7 +6,7 @@
     const INLINE_WAND_ATTR = 'data-moodush-openedu-inline-wand';
     const INLINE_MENU_CLASS = 'moodush-openedu-inline-menu';
     const WAND_VISIBILITY_KEY = 'paramExtOpeneduWandsHidden';
-    const QUESTION_INPUT_SELECTOR = 'input[type="radio"], input[type="checkbox"], input[type="text"]';
+    const QUESTION_INPUT_SELECTOR = 'input[type="radio"], input[type="checkbox"], input[type="text"], input[type="hidden"], select';
     const QUESTION_ROOT_SELECTOR = '[data-problem-id], .problem, .xblock-student_view-problem, .problems-wrapper, .wrapper-problem-response, fieldset, [role="group"], .choicegroup, [id^="problem_"]';
     const QUESTION_GROUP_SELECTOR = 'fieldset, .question, .subquestion, .problem-question, .wrapper-problem-response, .choicegroup, .answers, .options, .response, .answer';
     const OPTION_LABEL_SELECTOR = 'label.response-label, label.field-label, .choicegroup label[for], label[for], label';
@@ -139,6 +139,7 @@
     let topFrameOnlineState = { online: false, text: 'Wait...' };
     window.__PARAMEXT_TOPFRAME_ONLINE_STATE = topFrameOnlineState;
     let _topContextPromise = null;
+    const virtualContentDocsByHost = new WeakMap();
 
     function buildLocalOpeneduSharedApi() {
         let fingerprintPunctRe = null;
@@ -427,7 +428,9 @@
                 debugSync('top_received_iframe_online', topFrameOnlineState);
                 setStickOnline(topFrameOnlineState.online, topFrameOnlineState.text);
             } else if (event.data.type === 'PARAMEXT_OPENEDU_NEXT_REQUEST') {
-                requestNextSequencePage();
+                if (isAutoAdvanceEnabled()) {
+                    requestNextSequencePage();
+                }
             }
         } else if (event.data.type === 'PARAMEXT_OPENEDU_SCROLL_QUESTION') {
             const reference = event.data.question || {
@@ -1235,13 +1238,77 @@
         });
     }
 
-    function getSearchDocuments() {
-        if (!isTopFrame) {
-            return [document];
+    function getProblemContentHosts(rootDoc) {
+        if (!rootDoc || typeof rootDoc.querySelectorAll !== 'function') {
+            return [];
+        }
+        return Array.from(rootDoc.querySelectorAll('[data-content]'))
+            .filter((node) => node instanceof HTMLElement);
+    }
+
+    function hasLiveProblemContent(host) {
+        if (!(host instanceof HTMLElement)) {
+            return false;
+        }
+        return Boolean(host.querySelector(
+            QUESTION_INPUT_SELECTOR
+            + ', .adv-app[data-type="MatchingTableVueApp"]'
+            + ', .wrapper-problem-response'
+        ));
+    }
+
+    function getVirtualContentDocument(host) {
+        if (!(host instanceof HTMLElement) || hasLiveProblemContent(host)) {
+            return null;
         }
 
-        const docs = [];
-        collectSameOriginDocuments(document, docs, new Set());
+        const rawContent = host.getAttribute('data-content') || '';
+        const decodedContent = decodeHtmlEntities(rawContent);
+        if (!decodedContent || decodedContent.indexOf('<') === -1) {
+            return null;
+        }
+
+        const cached = virtualContentDocsByHost.get(host);
+        if (cached && cached.rawContent === rawContent) {
+            return cached.doc;
+        }
+
+        let parsedDoc = null;
+        try {
+            parsedDoc = new DOMParser().parseFromString(decodedContent, 'text/html');
+        } catch (_) {
+            parsedDoc = null;
+        }
+        if (!parsedDoc || !parsedDoc.body) {
+            return null;
+        }
+
+        parsedDoc.__PARAMEXT_VIRTUAL_CONTENT = true;
+        parsedDoc.__PARAMEXT_SOURCE_PATH = host.ownerDocument?.location?.pathname || location.pathname;
+        parsedDoc.__PARAMEXT_HOST_PROBLEM_ID = host.getAttribute('data-problem-id') || host.id || '';
+        virtualContentDocsByHost.set(host, { rawContent, doc: parsedDoc });
+        return parsedDoc;
+    }
+
+    function collectVirtualContentDocuments(rootDoc, out, seen) {
+        getProblemContentHosts(rootDoc).forEach((host) => {
+            const virtualDoc = getVirtualContentDocument(host);
+            if (virtualDoc && !seen.has(virtualDoc)) {
+                seen.add(virtualDoc);
+                out.push(virtualDoc);
+            }
+        });
+    }
+
+    function getSearchDocuments() {
+        const seen = new Set([document]);
+        const docs = [document];
+        collectVirtualContentDocuments(document, docs, seen);
+
+        if (!isTopFrame) {
+            return docs;
+        }
+
         return docs;
     }
 
@@ -1262,9 +1329,44 @@
         return root.querySelectorAll(OPTION_LABEL_SELECTOR).length > 0;
     }
 
-    function findQuestionRoot(control) {
+    function looksLikeMatchingTableAnswerValue(value) {
+        const decoded = decodeHtmlEntities(String(value || ''));
+        return /[{\[]/.test(decoded)
+            && /["']?answer["']?\s*:/.test(decoded)
+            && /\{/.test(decoded);
+    }
+
+    function findMatchingTableProblemRoot(control) {
         if (!(control instanceof HTMLInputElement)) {
             return null;
+        }
+        if (!looksLikeMatchingTableAnswerValue(control.value || '')) {
+            return null;
+        }
+
+        let current = control.parentElement;
+        while (current && current !== current.ownerDocument.documentElement) {
+            if (
+                current instanceof HTMLElement
+                && current.querySelector('.adv-app[data-type="MatchingTableVueApp"][data-initial-data]')
+            ) {
+                return current;
+            }
+            current = current.parentElement;
+        }
+
+        const container = control.closest('[data-problem-id], .problem, .xblock-student_view-problem, .problems-wrapper');
+        return container instanceof HTMLElement ? container : null;
+    }
+
+    function findQuestionRoot(control) {
+        if (!(control instanceof Element)) {
+            return null;
+        }
+
+        const matchingTableRoot = findMatchingTableProblemRoot(control);
+        if (matchingTableRoot) {
+            return matchingTableRoot;
         }
 
         let current = control;
@@ -1390,13 +1492,31 @@
         return cleanRawText;
     }
 
+    function decodeHtmlEntities(source) {
+        let value = String(source || '');
+        for (let i = 0; i < 2; i += 1) {
+            const next = value
+                .replace(/&quot;/g, '"')
+                .replace(/&#34;/g, '"')
+                .replace(/&apos;/g, "'")
+                .replace(/&#39;/g, "'")
+                .replace(/&amp;/g, '&');
+            if (next === value) {
+                break;
+            }
+            value = next;
+        }
+        return value;
+    }
+
     function parseOpenEduDataLiteral(raw) {
+        const decoded = decodeHtmlEntities(String(raw || ''));
         if (typeof openeduShared.parsePythonishDataLiteral === 'function') {
-            return openeduShared.parsePythonishDataLiteral(raw);
+            return openeduShared.parsePythonishDataLiteral(decoded);
         }
 
         try {
-            return JSON.parse(String(raw || ''));
+            return JSON.parse(decoded);
         } catch (_) {
             return null;
         }
@@ -1407,7 +1527,19 @@
             return null;
         }
         const app = root.querySelector('.adv-app[data-type="MatchingTableVueApp"][data-initial-data]');
-        return app instanceof HTMLElement ? app : null;
+        if (app instanceof HTMLElement) {
+            return app;
+        }
+
+        const container = root.closest('[data-problem-id], .problem, .xblock-student_view-problem, .problems-wrapper');
+        if (container instanceof HTMLElement && container !== root) {
+            const scopedApp = container.querySelector('.adv-app[data-type="MatchingTableVueApp"][data-initial-data]');
+            if (scopedApp instanceof HTMLElement) {
+                return scopedApp;
+            }
+        }
+
+        return null;
     }
 
     function getMatchingTableInput(root) {
@@ -1415,7 +1547,7 @@
             return null;
         }
 
-        const textInputs = root.querySelectorAll('input[type="text"]');
+        const textInputs = root.querySelectorAll('input[type="text"], input[type="hidden"]');
         for (const input of textInputs) {
             if (!(input instanceof HTMLInputElement)) {
                 continue;
@@ -1426,7 +1558,21 @@
             }
         }
 
-        return textInputs[0] instanceof HTMLInputElement ? textInputs[0] : null;
+        const doc = root.ownerDocument || document;
+        const container = root.closest('[data-problem-id], .problem, .xblock-student_view-problem, .problems-wrapper');
+        const scope = container instanceof HTMLElement ? container : doc;
+        const docInputs = scope.querySelectorAll('input[type="text"], input[type="hidden"]');
+        for (const input of docInputs) {
+            if (!(input instanceof HTMLInputElement)) {
+                continue;
+            }
+            const parsed = parseOpenEduDataLiteral(input.value || '');
+            if (parsed && typeof parsed === 'object' && parsed.answer && typeof parsed.answer === 'object') {
+                return input;
+            }
+        }
+
+        return null;
     }
 
     function getMatchingTableData(root) {
@@ -1498,6 +1644,25 @@
         return options;
     }
 
+    function getMatchingTablePrompt(root) {
+        const matchingData = getMatchingTableData(root);
+        if (!matchingData) {
+            return '';
+        }
+
+        const content = matchingData.initialData?.content;
+        if (!content || typeof content !== 'object') {
+            return '';
+        }
+
+        const prompt = collapseWhitespace(content.body || content.title || '');
+        return normalizePromptLikeText(prompt);
+    }
+
+    function isQuestionControl(node) {
+        return node instanceof HTMLInputElement || node instanceof HTMLSelectElement;
+    }
+
     function getQuestionBlocks() {
         const seen = new WeakSet();
         const result = [];
@@ -1506,7 +1671,7 @@
         docs.forEach((doc) => {
             const controls = doc.querySelectorAll(QUESTION_INPUT_SELECTOR);
             controls.forEach((control) => {
-                if (!(control instanceof HTMLInputElement)) {
+                if (!isQuestionControl(control)) {
                     return;
                 }
 
@@ -1552,6 +1717,37 @@
 
     function normalizeQuestionOptionText(value) {
         return normalizePromptLikeText(value);
+    }
+
+    function isSelectPlaceholderOption(option) {
+        if (!(option instanceof HTMLOptionElement)) {
+            return false;
+        }
+
+        const value = normalizeText(option.value || '');
+        const text = normalizeText(textOf(option) || option.label || '');
+        if (option.disabled) {
+            return true;
+        }
+        if (!text && !value) {
+            return true;
+        }
+        if ((value === '' || /dummy|placeholder|default/.test(value)) && /(выберите|choose|select)/.test(text)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    function getSelectOptionAnswerText(option) {
+        if (!(option instanceof HTMLOptionElement)) {
+            return '';
+        }
+
+        const rawText = collapseWhitespace(textOf(option) || option.label || '');
+        const fallback = collapseWhitespace(option.value || '');
+        const baseText = rawText || fallback;
+        return normalizeQuestionOptionText(baseText);
     }
 
     function getMarkerText(label, input) {
@@ -1751,6 +1947,13 @@
         return hash(controlName + '|' + controlValue + '|' + controlId + '|' + answerText + '|' + String(fallbackIndex));
     }
 
+    function buildSelectAnswerKey(answerText, select, optionValue, fallbackIndex) {
+        const controlName = select instanceof HTMLSelectElement ? select.name || '' : '';
+        const controlValue = collapseWhitespace(optionValue || '');
+        const controlId = select instanceof HTMLSelectElement ? select.id || '' : '';
+        return hash(controlName + '|' + controlValue + '|' + controlId + '|' + answerText + '|' + String(fallbackIndex));
+    }
+
     function buildElementPath(root, element) {
         if (!(root instanceof Element) || !(element instanceof Element)) {
             return '';
@@ -1797,7 +2000,7 @@
     }
 
     function getInputGroupContainer(root, input) {
-        if (!(root instanceof HTMLElement) || !(input instanceof HTMLInputElement)) {
+        if (!(root instanceof HTMLElement) || !(input instanceof Element)) {
             return root;
         }
 
@@ -1848,7 +2051,7 @@
         }
 
         const input = getElementByPath(root, inputPath);
-        if (!(input instanceof HTMLInputElement)) {
+        if (!(input instanceof HTMLInputElement) && !(input instanceof HTMLSelectElement)) {
             return root;
         }
 
@@ -1861,7 +2064,10 @@
             }
 
             if (inputName) {
-                const scopedSameName = current.querySelectorAll('input[name="' + escapeSelector(inputName) + '"]').length;
+                const scopedSameName = current.querySelectorAll(
+                    'input[name="' + escapeSelector(inputName) + '"]'
+                    + ', select[name="' + escapeSelector(inputName) + '"]'
+                ).length;
                 if (scopedSameName === expectedCount) {
                     return current;
                 }
@@ -1884,14 +2090,93 @@
             return matchingOptions;
         }
 
-        const labels = root.querySelectorAll(OPTION_LABEL_SELECTOR);
         const usedKeys = new Set();
+
+        const selects = root.querySelectorAll('select');
+        selects.forEach((select, sidx) => {
+            if (!(select instanceof HTMLSelectElement)) {
+                return;
+            }
+
+            const inputId = select.id || '';
+            const inputName = String(select.name || '').trim();
+            const groupContainer = getInputGroupContainer(root, select);
+            const groupPath = groupContainer && groupContainer !== root ? buildElementPath(root, groupContainer) : '';
+            const groupKey = groupPath
+                ? ('c:' + groupPath)
+                : (inputName ? ('s:' + inputName) : ('s:' + String(sidx)));
+            const inputPath = buildElementPath(root, select);
+
+            const statusRef = String(select.getAttribute('aria-describedby') || '').trim();
+            const statusNode = statusRef
+                ? (select.ownerDocument || document).getElementById(statusRef)
+                : null;
+            const selectStatus = statusNode instanceof Element
+                ? markerStateFromNode(statusNode, true)
+                : null;
+
+            Array.from(select.options || []).forEach((optionNode, oidx) => {
+                if (!(optionNode instanceof HTMLOptionElement)) {
+                    return;
+                }
+                if (isSelectPlaceholderOption(optionNode)) {
+                    return;
+                }
+
+                const answerText = getSelectOptionAnswerText(optionNode);
+                if (!answerText) {
+                    return;
+                }
+
+                const optionValue = collapseWhitespace(optionNode.value || '');
+                const dedupeKey = groupKey + '|' + (optionValue || answerText);
+                if (usedKeys.has(dedupeKey)) {
+                    return;
+                }
+                usedKeys.add(dedupeKey);
+
+                const answerAliases = [];
+                const aliasSeen = new Set();
+                const normalizedAnswerText = normalizeText(answerText);
+                if (normalizedAnswerText) {
+                    aliasSeen.add(normalizedAnswerText);
+                }
+                addOptionAlias(answerAliases, aliasSeen, optionNode.label || '');
+                addOptionAlias(answerAliases, aliasSeen, optionNode.value || '');
+                addOptionAlias(answerAliases, aliasSeen, optionNode.getAttribute('aria-label') || '');
+                addOptionAlias(answerAliases, aliasSeen, optionNode.getAttribute('title') || '');
+
+                const markedState = optionNode.selected ? selectStatus : null;
+
+                options.push({
+                    answerKey: buildSelectAnswerKey(answerText, select, optionValue, oidx),
+                    answerText,
+                    selected: Boolean(optionNode.selected),
+                    correct: markedState === true,
+                    incorrect: markedState === false,
+                    answerAliases,
+                    inputId,
+                    inputName,
+                    inputValue: optionValue,
+                    groupKey,
+                    groupPath,
+                    inputPath,
+                    inputType: 'select'
+                });
+            });
+        });
+
+        const labels = root.querySelectorAll(OPTION_LABEL_SELECTOR);
 
         labels.forEach((label, idx) => {
             const inputId = label.getAttribute('for') || '';
             const input = inputId
                 ? root.querySelector('#' + escapeSelector(inputId))
                 : label.querySelector('input[type="radio"], input[type="checkbox"]');
+
+            if (input instanceof HTMLSelectElement) {
+                return;
+            }
 
             // Skip labels paired with text inputs — handled separately below.
             if (input instanceof HTMLInputElement && input.type === 'text') {
@@ -2329,6 +2614,12 @@
         return sourcePath + '|' + String(locationBucket) + '|' + String(groupIdentity || '') + '|' + normalizedPrompt + '|' + optionSignature;
     }
 
+    function getQuestionSourcePath(doc) {
+        return doc?.__PARAMEXT_SOURCE_PATH
+            || doc?.location?.pathname
+            || location.pathname;
+    }
+
     function parseQuestions() {
         const blocks = getQuestionBlocks();
 
@@ -2340,9 +2631,11 @@
                 return;
             }
 
-            const sourcePath = root.ownerDocument?.location?.pathname || location.pathname;
-            const baseDomId = root.getAttribute('data-problem-id') || root.getAttribute('id') || ('question-' + idx);
-            const fallbackPrompt = getQuestionPrompt(root);
+            const ownerDoc = root.ownerDocument || document;
+            const sourcePath = getQuestionSourcePath(ownerDoc);
+            const virtualProblemId = ownerDoc.__PARAMEXT_HOST_PROBLEM_ID || '';
+            const baseDomId = root.getAttribute('data-problem-id') || root.getAttribute('id') || virtualProblemId || ('question-' + idx);
+            const fallbackPrompt = getQuestionPrompt(root) || getMatchingTablePrompt(root);
 
             const grouped = new Map();
             options.forEach((option, optionIndex) => {
@@ -2411,6 +2704,7 @@
                     options: groupOptions,
                     allowsMultipleAnswers,
                     hasVerifiedAnswer: byStatus || byOptions,
+                    fromVirtualContent: Boolean(ownerDoc.__PARAMEXT_VIRTUAL_CONTENT),
                     signature,
                     nodeSize,
                     nodeDepth,
@@ -2465,6 +2759,7 @@
             options: item.options,
             allowsMultipleAnswers: item.allowsMultipleAnswers,
             hasVerifiedAnswer: item.hasVerifiedAnswer,
+            fromVirtualContent: Boolean(item.fromVirtualContent),
             orderIndex: item.orderIndex
         }));
     }
@@ -2623,6 +2918,22 @@
             return false;
         }
 
+        if (question.fromVirtualContent) {
+            return isTopFrame
+                ? broadcastApplyMessageToChildFrames({
+                    type: 'PARAMEXT_APPLY_ANSWERS',
+                    question: {
+                        questionKey: question.questionKey,
+                        domId: question.domId,
+                        prompt: question.prompt,
+                        options: Array.isArray(question.options) ? question.options : []
+                    },
+                    answers: Array.isArray(answers) ? answers : [],
+                    mode: typeof mode === 'string' ? mode : 'add'
+                })
+                : false;
+        }
+
         if (isTopFrame && question.fromIframe) {
             return broadcastApplyMessageToChildFrames({
                 type: 'PARAMEXT_APPLY_ANSWERS',
@@ -2696,8 +3007,37 @@
         return null;
     }
 
+    function findSelectForOption(block, option) {
+        if (option.inputPath) {
+            const byPath = getElementByPath(block, option.inputPath);
+            if (byPath instanceof HTMLSelectElement) {
+                return byPath;
+            }
+        }
+
+        if (option.inputId) {
+            const direct = block.querySelector('#' + escapeSelector(option.inputId));
+            if (direct instanceof HTMLSelectElement) {
+                return direct;
+            }
+        }
+
+        if (option.inputName) {
+            const byName = block.querySelector('select[name="' + escapeSelector(option.inputName) + '"]');
+            if (byName instanceof HTMLSelectElement) {
+                return byName;
+            }
+        }
+
+        return null;
+    }
+
     function questionAllowsMultipleAnswers(block) {
         if (getMatchingTableData(block)) {
+            return true;
+        }
+        const multiSelects = block.querySelectorAll('select[multiple]');
+        if (multiSelects.length > 0) {
             return true;
         }
         const checkboxes = block.querySelectorAll('input[type="checkbox"]');
@@ -2785,7 +3125,251 @@
     }
 
     function normalizeMatchingTargetKey(value) {
-        return normalizeText(String(value || '').replace(/\s*:\s*/g, ': '));
+        const decoded = decodeHtmlEntities(String(value || ''));
+        const normalized = typeof openeduShared.normalizeMatchingText === 'function'
+            ? openeduShared.normalizeMatchingText(decoded)
+            : normalizeText(decoded);
+        return normalizeText(String(normalized || '').replace(/\s*[:/|]\s*/g, ': '));
+    }
+
+    function getMatchingCellInfo(initialData, cellId) {
+        const table = Array.isArray(initialData?.table) ? initialData.table : [];
+        const targetId = String(cellId || '').trim();
+        if (!targetId) {
+            return null;
+        }
+
+        for (let rowIndex = 0; rowIndex < table.length; rowIndex += 1) {
+            const row = table[rowIndex];
+            if (!Array.isArray(row)) {
+                continue;
+            }
+
+            for (let colIndex = 0; colIndex < row.length; colIndex += 1) {
+                const cell = row[colIndex];
+                if (!cell || typeof cell !== 'object' || String(cell.id || '') !== targetId) {
+                    continue;
+                }
+
+                const rowFixedTexts = row
+                    .filter((candidate) => candidate && candidate.isFixed)
+                    .map((candidate) => {
+                        const values = Array.isArray(candidate.value) ? candidate.value : [];
+                        const raw = values.join(' ');
+                        return typeof openeduShared.normalizeMatchingText === 'function'
+                            ? openeduShared.normalizeMatchingText(raw)
+                            : normalizeQuestionOptionText(raw);
+                    })
+                    .filter(Boolean);
+
+                return {
+                    cellId: targetId,
+                    rowIndex,
+                    colIndex,
+                    rowFixedText: rowFixedTexts[0] || '',
+                    rowFixedTexts
+                };
+            }
+        }
+
+        return null;
+    }
+
+    function isElementVisibleEnough(element) {
+        if (!(element instanceof Element)) {
+            return false;
+        }
+
+        const style = element.ownerDocument?.defaultView?.getComputedStyle
+            ? element.ownerDocument.defaultView.getComputedStyle(element)
+            : null;
+        if (style && (style.display === 'none' || style.visibility === 'hidden')) {
+            return false;
+        }
+
+        const rect = typeof element.getBoundingClientRect === 'function'
+            ? element.getBoundingClientRect()
+            : null;
+        return !rect || rect.width > 0 || rect.height > 0 || Boolean(element.offsetParent);
+    }
+
+    function findMatchingElementById(root, id, attrNames) {
+        if (!(root instanceof Element)) {
+            return null;
+        }
+
+        const normalizedId = String(id || '').trim();
+        if (!normalizedId) {
+            return null;
+        }
+
+        const escaped = escapeSelector(normalizedId);
+        const selectors = ['#' + escaped]
+            .concat((Array.isArray(attrNames) ? attrNames : []).map((attr) => '[' + attr + '="' + escaped + '"]'));
+
+        for (const selector of selectors) {
+            const found = root.querySelector(selector);
+            if (found instanceof HTMLElement && isElementVisibleEnough(found)) {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    function getSmallestExactTextElement(root, text) {
+        if (!(root instanceof Element)) {
+            return null;
+        }
+
+        const expected = normalizeMatchingTargetKey(text);
+        if (!expected) {
+            return null;
+        }
+
+        const candidates = Array.from(root.querySelectorAll('*'))
+            .filter((node) => node instanceof HTMLElement)
+            .filter((node) => !node.matches(PARAMEXT_WIDGET_SELECTOR))
+            .filter((node) => isElementVisibleEnough(node))
+            .filter((node) => normalizeMatchingTargetKey(textOf(node)) === expected);
+
+        candidates.sort((a, b) => {
+            const aChildren = a.children.length;
+            const bChildren = b.children.length;
+            if (aChildren !== bChildren) {
+                return aChildren - bChildren;
+            }
+            return textOf(a).length - textOf(b).length;
+        });
+
+        return candidates[0] || null;
+    }
+
+    function getMatchingAnswerMoveElement(answerElement) {
+        if (!(answerElement instanceof HTMLElement)) {
+            return null;
+        }
+
+        let current = answerElement;
+        while (current.parentElement && current.parentElement instanceof HTMLElement) {
+            const parent = current.parentElement;
+            const parentText = normalizeMatchingTargetKey(textOf(parent));
+            const currentText = normalizeMatchingTargetKey(textOf(current));
+            if (parentText !== currentText || parent.matches('td, th, tr, table, tbody, .adv-app')) {
+                break;
+            }
+            current = parent;
+        }
+
+        return current;
+    }
+
+    function findMatchingTableRowContainer(labelElement, rowText) {
+        if (!(labelElement instanceof HTMLElement)) {
+            return null;
+        }
+
+        const tableRow = labelElement.closest('tr');
+        if (tableRow instanceof HTMLElement) {
+            return tableRow;
+        }
+
+        let current = labelElement;
+        const expected = normalizeMatchingTargetKey(rowText);
+        while (current && current.parentElement) {
+            const parent = current.parentElement;
+            if (!(parent instanceof HTMLElement) || parent.matches('.adv-app')) {
+                break;
+            }
+
+            const children = Array.from(parent.children).filter((child) => child instanceof HTMLElement);
+            const hasLabelChild = children.some((child) => normalizeMatchingTargetKey(textOf(child)).includes(expected));
+            if (children.length >= 2 && hasLabelChild) {
+                return parent;
+            }
+
+            current = parent;
+        }
+
+        return null;
+    }
+
+    function findMatchingTableTargetCell(matchingData, target) {
+        const app = matchingData?.app;
+        if (!(app instanceof HTMLElement)) {
+            return null;
+        }
+
+        const direct = findMatchingElementById(app, target?.cellId, [
+            'data-id',
+            'data-cell-id',
+            'data-target-id',
+            'data-value'
+        ]);
+        if (direct instanceof HTMLElement) {
+            return direct;
+        }
+
+        const cellInfo = getMatchingCellInfo(matchingData.initialData, target?.cellId);
+        const rowText = cellInfo?.rowFixedText || String(target?.cellLabel || '').split('/')[0] || '';
+        const labelElement = getSmallestExactTextElement(app, rowText);
+        const rowContainer = findMatchingTableRowContainer(labelElement, rowText);
+        if (!(rowContainer instanceof HTMLElement)) {
+            return null;
+        }
+
+        const rowCells = Array.from(rowContainer.children).filter((child) => child instanceof HTMLElement);
+        if (cellInfo && rowCells[cellInfo.colIndex] instanceof HTMLElement) {
+            return rowCells[cellInfo.colIndex];
+        }
+
+        const labelIndex = rowCells.findIndex((child) => child.contains(labelElement));
+        const fallback = labelIndex >= 0 ? rowCells[labelIndex + 1] : null;
+        return fallback instanceof HTMLElement ? fallback : null;
+    }
+
+    function findMatchingTableAnswerElement(matchingData, target) {
+        const app = matchingData?.app;
+        if (!(app instanceof HTMLElement)) {
+            return null;
+        }
+
+        const direct = findMatchingElementById(app, target?.answerId, [
+            'data-id',
+            'data-answer-id',
+            'data-source-id',
+            'data-value'
+        ]);
+        if (direct instanceof HTMLElement) {
+            return getMatchingAnswerMoveElement(direct);
+        }
+
+        const byText = getSmallestExactTextElement(app, target?.answerTitle || '');
+        return getMatchingAnswerMoveElement(byText);
+    }
+
+    function syncMatchingTableVisualAnswers(matchingData, targets) {
+        if (!matchingData?.app || !Array.isArray(targets) || targets.length === 0) {
+            return false;
+        }
+
+        let movedCount = 0;
+        targets.forEach((target) => {
+            const cell = findMatchingTableTargetCell(matchingData, target);
+            const answerElement = findMatchingTableAnswerElement(matchingData, target);
+            if (!(cell instanceof HTMLElement) || !(answerElement instanceof HTMLElement)) {
+                return;
+            }
+            if (cell.contains(answerElement)) {
+                movedCount += 1;
+                return;
+            }
+
+            cell.appendChild(answerElement);
+            movedCount += 1;
+        });
+
+        return movedCount > 0;
     }
 
     function resolveMatchingTargets(block, answers) {
@@ -2807,6 +3391,8 @@
             }
 
             const item = { cellId, answerId, answerText };
+            item.answerTitle = String(candidate.answerTitle || '').trim();
+            item.cellLabel = String(candidate.cellLabel || '').trim();
             byKey.set('match:' + cellId + ':' + answerId, item);
             byText.set(normalizeMatchingTargetKey(answerText), item);
         });
@@ -2852,13 +3438,96 @@
         setNativeInputValue(matchingData.input, JSON.stringify({ answer: nextAnswer }));
         matchingData.input.dispatchEvent(new Event('input', { bubbles: true }));
         matchingData.input.dispatchEvent(new Event('change', { bubbles: true }));
+        const visualSynced = syncMatchingTableVisualAnswers(matchingData, targets);
         highlightQuestionBlock(block);
         debugSync('apply_answers_success', {
             questionKey: question?.questionKey || '',
             mode: 'matching-table',
+            visualSynced,
             selected: targets.map((item) => ({
                 answerText: item.answerText,
                 answerKey: 'match:' + item.cellId + ':' + item.answerId
+            }))
+        });
+        return true;
+    }
+
+    function applySelectAnswers(block, question, answers, mode) {
+        const options = getAnswerOptions(block);
+        const targets = resolveTargetOptions(options, answers);
+        if (targets.length === 0) {
+            debugSync('apply_answers_failed', {
+                reason: 'select_targets_not_resolved',
+                questionKey: question?.questionKey || ''
+            });
+            return false;
+        }
+
+        const select = findSelectForOption(block, targets[0]);
+        if (!(select instanceof HTMLSelectElement)) {
+            debugSync('apply_answers_failed', {
+                reason: 'select_not_found',
+                questionKey: question?.questionKey || ''
+            });
+            return false;
+        }
+
+        const modeName = typeof mode === 'string' ? mode : 'add';
+        const targetValues = new Set();
+        const targetTexts = new Set();
+        targets.forEach((target) => {
+            const value = normalizeText(target?.inputValue || '');
+            const text = normalizeText(target?.answerText || '');
+            if (value) {
+                targetValues.add(value);
+            }
+            if (text) {
+                targetTexts.add(text);
+            }
+        });
+
+        const optionNodes = Array.from(select.options || []).filter((item) => item instanceof HTMLOptionElement);
+        const shouldSelectOption = (optionNode) => {
+            if (isSelectPlaceholderOption(optionNode)) {
+                return false;
+            }
+            const optionValue = normalizeText(optionNode.value || '');
+            const optionText = normalizeText(getSelectOptionAnswerText(optionNode));
+            return targetValues.has(optionValue) || targetTexts.has(optionText);
+        };
+
+        if (select.multiple && modeName !== 'set-all') {
+            optionNodes.forEach((optionNode) => {
+                if (shouldSelectOption(optionNode)) {
+                    optionNode.selected = true;
+                }
+            });
+        } else if (select.multiple || modeName === 'set-all') {
+            optionNodes.forEach((optionNode) => {
+                optionNode.selected = shouldSelectOption(optionNode);
+            });
+        } else {
+            const selectedOption = optionNodes.find((optionNode) => shouldSelectOption(optionNode)) || null;
+            if (!selectedOption) {
+                debugSync('apply_answers_failed', {
+                    reason: 'select_option_not_found',
+                    questionKey: question?.questionKey || ''
+                });
+                return false;
+            }
+            select.value = selectedOption.value;
+            selectedOption.selected = true;
+        }
+
+        select.dispatchEvent(new Event('input', { bubbles: true }));
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        highlightQuestionBlock(block);
+        debugSync('apply_answers_success', {
+            questionKey: question?.questionKey || '',
+            mode: 'select',
+            selected: targets.map((item) => ({
+                answerKey: item.answerKey,
+                answerText: item.answerText
             }))
         });
         return true;
@@ -2905,6 +3574,12 @@
                 answerText: targetText
             });
             return true;
+        }
+
+        const hasSelectOption = Array.isArray(question?.options)
+            && question.options.some((option) => option.inputType === 'select');
+        if (hasSelectOption) {
+            return applySelectAnswers(block, question, answers, mode);
         }
 
         const options = getAnswerOptions(block);
@@ -3279,6 +3954,19 @@
         return scrollToQuestion(question);
     }
 
+    function selectHasMeaningfulAnswer(select) {
+        if (!(select instanceof HTMLSelectElement)) {
+            return false;
+        }
+
+        const selected = Array.from(select.options || []).filter((option) => option.selected);
+        if (selected.length === 0) {
+            return false;
+        }
+
+        return selected.some((option) => !isSelectPlaceholderOption(option));
+    }
+
     function questionHasAnyUserAnswer(question) {
         const block = locateQuestionBlock(question);
         if (!(block instanceof HTMLElement)) {
@@ -3286,6 +3974,11 @@
         }
 
         if (block.querySelector('input[type="radio"]:checked, input[type="checkbox"]:checked')) {
+            return true;
+        }
+
+        const selectAnswered = Array.from(block.querySelectorAll('select')).some((select) => selectHasMeaningfulAnswer(select));
+        if (selectAnswered) {
             return true;
         }
 
@@ -3386,7 +4079,7 @@
                 }
 
                 manualAnswerContinuationInFlight = false;
-                if (isOpeneduAutoSolveMode() && !requestNextSequencePage()) {
+                if (isOpeneduAutoSolveMode() && isAutoAdvanceEnabled() && !requestNextSequencePage()) {
                     scheduleCycle(true, 'manual-answer-complete', { allowNetwork: true });
                 } else if (!isOpeneduAutoSolveMode()) {
                     maybeAutoCheckInsertedAnswers(
@@ -3442,6 +4135,36 @@
         return Boolean(targetText) && textInput.value.trim() === targetText;
     }
 
+    function areSelectAnswersApplied(block, answers) {
+        const options = getAnswerOptions(block);
+        const targets = resolveTargetOptions(options, answers);
+        if (targets.length === 0) {
+            return false;
+        }
+
+        const select = findSelectForOption(block, targets[0]);
+        if (!(select instanceof HTMLSelectElement)) {
+            return false;
+        }
+
+        const selectedValues = new Set(
+            Array.from(select.options || [])
+                .filter((option) => option instanceof HTMLOptionElement && option.selected)
+                .map((option) => normalizeText(option.value || ''))
+        );
+        const selectedTexts = new Set(
+            Array.from(select.options || [])
+                .filter((option) => option instanceof HTMLOptionElement && option.selected)
+                .map((option) => normalizeText(getSelectOptionAnswerText(option)))
+        );
+
+        return targets.every((target) => {
+            const value = normalizeText(target?.inputValue || '');
+            const text = normalizeText(target?.answerText || '');
+            return (value && selectedValues.has(value)) || (text && selectedTexts.has(text));
+        });
+    }
+
     function areChoiceAnswersApplied(block, answers) {
         const options = getAnswerOptions(block);
         const targets = resolveTargetOptions(options, answers);
@@ -3486,6 +4209,10 @@
 
         if (getMatchingTableData(block)) {
             return areMatchingAnswersApplied(block, answers);
+        }
+
+        if (block.querySelector('select') instanceof HTMLSelectElement) {
+            return areSelectAnswersApplied(block, answers);
         }
 
         if (block.querySelector('input[type="text"]') instanceof HTMLInputElement) {
@@ -3769,7 +4496,7 @@
 
         if (action === 'advance') {
             pendingManualAnswerQuestion = null;
-            if (!isOpeneduAutoSolveMode()) {
+            if (!isOpeneduAutoSolveMode() || !isAutoAdvanceEnabled()) {
                 debugSync('missing_answer_action', {
                     action,
                     missingCount: missingQuestions.length,
@@ -3930,6 +4657,10 @@
         }
 
         questions.forEach((question) => {
+            if (question?.fromVirtualContent) {
+                return;
+            }
+
             const block = locateQuestionBlock(question);
             if (!block) {
                 return;
@@ -4608,13 +5339,18 @@
                     Array.isArray(question.options) ? question.options.map((option) => option.answerText) : [],
                 ),
                 fromIframe: true,
+                fromVirtualContent: Boolean(question.fromVirtualContent),
                 options: (Array.isArray(question.options) ? question.options : []).map((option) => ({
                     answerKey: option.answerKey,
                     answerText: sanitizeAnswerText(option.answerText),
                     selected: option.selected,
                     correct: option.correct,
                     incorrect: option.incorrect,
-                    inputType: option.inputType || ''
+                    inputType: option.inputType || '',
+                    inputId: option.inputId || '',
+                    inputName: option.inputName || '',
+                    matchingCellId: option.matchingCellId || '',
+                    matchingAnswerId: option.matchingAnswerId || ''
                 }))
             }));
 
@@ -4982,7 +5718,7 @@
     }
 
     function isAutoAdvanceEnabled() {
-        return settings.openedu.autoAdvanceEnabled || settings.openedu.mode === 'autoSolve';
+        return Boolean(settings?.openedu?.autoAdvanceEnabled);
     }
 
     function maybeClickNextOnSequencePage() {
@@ -5055,7 +5791,7 @@
                 return;
             }
 
-            if (isTopFrame && actionable.matches('.sequence-navigation-tabs button, .next-btn, .next-button')) {
+            if (isTopFrame && isAutoAdvanceEnabled() && actionable.matches('.sequence-navigation-tabs button, .next-btn, .next-button')) {
                 setTimeout(() => {
                     maybeClickNextOnSequencePage();
                 }, 180);

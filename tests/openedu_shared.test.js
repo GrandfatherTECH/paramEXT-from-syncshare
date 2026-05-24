@@ -186,6 +186,12 @@ test('parsePythonishDataLiteral reads OpenEdu advanced component payloads', () =
     assert.equal(parsed.items[1].id, 'a');
 });
 
+test('parsePythonishDataLiteral decodes html-escaped OpenEdu payloads', () => {
+    const parsed = openeduShared.parsePythonishDataLiteral('{&#39;answer&#39;: {&#39;cell&#39;: [&#39;ans&#39;]}}');
+
+    assert.deepEqual(parsed, { answer: { cell: ['ans'] } });
+});
+
 test('buildMatchingTablePairs converts MatchingTableVueApp state into stable answer texts', () => {
     const initialData = openeduShared.parsePythonishDataLiteral(
         "{'table': [[{'isFixed': true, 'value': ['__Философ__']}, {'isFixed': true, 'value': ['__Первоначало__']}], [{'isFixed': true, 'value': ['Фалес']}, {'isFixed': false, 'id': 'cell_water'}]], 'answers': [{'id': 'ans_water', 'title': 'вода'}, {'id': 'ans_fire', 'title': 'огонь'}]}"
@@ -201,5 +207,23 @@ test('buildMatchingTablePairs converts MatchingTableVueApp state into stable ans
     assert.equal(pairs[0].cellId, 'cell_water');
     assert.equal(pairs[0].answerId, 'ans_water');
     assert.equal(pairs[0].answerText, 'Фалес / Первоначало: вода');
+    assert.equal(pairs[0].selected, true);
+});
+
+test('buildMatchingTablePairs supports matching tables without a header row', () => {
+    const initialData = openeduShared.parsePythonishDataLiteral(
+        "{'table': [[{'isFixed': true, 'value': ['Что есть прекрасное?']}, {'isFixed': false, 'id': 'cell_a'}]], 'answers': [{'id': 'ans_a', 'title': 'Эстетика'}]}"
+    );
+
+    const pairs = openeduShared.buildMatchingTablePairs(
+        initialData,
+        '{"answer":{"cell_a":["ans_a"]}}',
+        true
+    );
+
+    assert.equal(pairs.length, 1);
+    assert.equal(pairs[0].cellId, 'cell_a');
+    assert.equal(pairs[0].answerId, 'ans_a');
+    assert.equal(pairs[0].answerText, 'Что есть прекрасное?: Эстетика');
     assert.equal(pairs[0].selected, true);
 });
