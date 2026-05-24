@@ -1660,7 +1660,20 @@
     }
 
     function isQuestionControl(node) {
-        return node instanceof HTMLInputElement || node instanceof HTMLSelectElement;
+        if (node instanceof HTMLSelectElement) {
+            return true;
+        }
+
+        if (!(node instanceof HTMLInputElement)) {
+            return false;
+        }
+
+        const type = String(node.type || '').toLowerCase();
+        if (type === 'radio' || type === 'checkbox' || type === 'text') {
+            return true;
+        }
+
+        return type === 'hidden' && looksLikeMatchingTableAnswerValue(node.value || '');
     }
 
     function getQuestionBlocks() {
