@@ -38,9 +38,28 @@
     const MUTATION_TRIGGER_THROTTLE_MS = 3000;
     const DEBUG_SYNC_STORAGE_KEY = 'paramExtOpeneduDebug';
     const PARTICIPANT_KEY_STORAGE = 'paramExtOpeneduParticipantKey';
+    const OPENEDU_TOKEN_REQUIRED_TITLE = 'Нужен токен OpenEdu';
+    const OPENEDU_TOKEN_REQUIRED_TEXT = 'Чтобы синхронизировать ответы и статистику OpenEdu, укажите Bearer токен в настройках расширения: API OpenEdu.';
 
-    const NEGATIVE_MARK_RE = /(choicegroup_incorrect|(^|[^a-zа-яё])(incorrect|wrong|false|неверн|неправильн|ошиб)([^a-zа-яё]|$))/i;
-    const POSITIVE_MARK_RE = /(choicegroup_correct|(^|[^a-zа-яё])(correct|right|true|верн|правильн)([^a-zа-яё]|$))/i;
+    const NEGATIVE_MARK_RE = /(choicegroup_incorrect|[✗✘✕❌×]|(^|[^a-zа-яё])(incorrect|wrong|false|неверн|неправильн|ошиб)([^a-zа-яё]|$))/i;
+    const POSITIVE_MARK_RE = /(choicegroup_correct|[✓✔✅☑]|(^|[^a-zа-яё])(correct|right|true|верн|правильн)([^a-zа-яё]|$))/i;
+    const NEGATIVE_ICON_MARK_RE = /(^|[\s_-])(fa-times|fa-remove|fa-close|fa-xmark|times|xmark|x-mark|cross|remove|close|cancel|wrong|incorrect|error)(?=$|[\s_-])/i;
+    const POSITIVE_ICON_MARK_RE = /(^|[\s_-])(fa-check|fa-check-circle|check|check-circle|done|success|right|correct)(?=$|[\s_-])/i;
+    const STATUS_MARKER_SELECTOR = [
+        '.status',
+        '.status-icon',
+        '.icon',
+        '.fa',
+        '.fa-check',
+        '.fa-check-circle',
+        '.fa-times',
+        '.fa-remove',
+        '.fa-close',
+        '.fa-xmark',
+        '[data-icon]',
+        '[data-correct]',
+        '[data-state]'
+    ].join(', ');
 
     if (!HOST_RE.test(location.hostname)) {
         return;
@@ -339,10 +358,17 @@
                     answerKey: option.answerKey,
                     answerText: option.answerText,
                     selected: Boolean(option.selected),
-                    markedCorrect: Boolean(option.correct)
+                    markedCorrect: Boolean(option.correct),
+                    markedIncorrect: Boolean(option.incorrect)
                 })),
             markedCorrectAnswers: (Array.isArray(question.options) ? question.options : [])
                 .filter((option) => option.correct)
+                .map((option) => ({
+                    answerKey: option.answerKey,
+                    answerText: option.answerText
+                })),
+            markedIncorrectAnswers: (Array.isArray(question.options) ? question.options : [])
+                .filter((option) => option.incorrect)
                 .map((option) => ({
                     answerKey: option.answerKey,
                     answerText: option.answerText
@@ -596,6 +622,14 @@
             headers['X-API-Token'] = token;
         }
         return headers;
+    }
+
+    function getOpeneduApiToken() {
+        return collapseWhitespace(settings?.backend?.openedu?.apiToken || settings?.backend?.apiToken || '');
+    }
+
+    function hasOpeneduApiToken() {
+        return getOpeneduApiToken().length > 0;
     }
 
     function maybeLogBackendIssue(kind, payload) {
@@ -1532,10 +1566,13 @@
             String(input?.getAttribute?.('data-state') || '')
         ];
 
-        const host = label?.closest?.('li, .answer, .option, .response') || input?.closest?.('li, .answer, .option, .response');
+        const host = label?.closest?.('li, .answer, .option, .response, .correct, .incorrect')
+            || input?.closest?.('li, .answer, .option, .response, .correct, .incorrect');
         if (host) {
             pieces.push(String(host.className || ''));
             pieces.push(String(host.getAttribute('aria-label') || ''));
+            pieces.push(String(host.getAttribute('title') || ''));
+            pieces.push(String(host.getAttribute('data-tooltip') || ''));
             pieces.push(String(host.getAttribute('data-state') || ''));
             pieces.push(String(host.getAttribute('data-correct') || ''));
         }
@@ -1543,37 +1580,146 @@
         return pieces.join(' ').toLowerCase();
     }
 
+    function getOwnMarkerText(node, includeText) {
+        if (!(node instanceof Element)) {
+            return '';
+        }
+
+        const pieces = [
+            node.getAttribute('class') || '',
+            node.getAttribute('aria-label') || '',
+            node.getAttribute('title') || '',
+            node.getAttribute('data-tooltip') || '',
+            node.getAttribute('data-icon') || '',
+            node.getAttribute('data-state') || '',
+            node.getAttribute('data-correct') || ''
+        ];
+
+        if (includeText) {
+            pieces.push(textOf(node));
+        }
+
+        return pieces.join(' ').toLowerCase();
+    }
+
+    function markerStateFromText(value, includeIconMarkers) {
+        const text = String(value || '').toLowerCase();
+        if (!text) {
+            return null;
+        }
+
+        if (NEGATIVE_MARK_RE.test(text) || (includeIconMarkers && NEGATIVE_ICON_MARK_RE.test(text))) {
+            return false;
+        }
+        if (POSITIVE_MARK_RE.test(text) || (includeIconMarkers && POSITIVE_ICON_MARK_RE.test(text))) {
+            return true;
+        }
+
+        return null;
+    }
+
+    function markerStateFromNode(node, includeDescendants) {
+        if (!(node instanceof Element)) {
+            return null;
+        }
+
+        const ownState = markerStateFromText(getOwnMarkerText(node, true), true);
+        if (ownState !== null) {
+            return ownState;
+        }
+
+        if (!includeDescendants) {
+            return null;
+        }
+
+        const markers = node.querySelectorAll(STATUS_MARKER_SELECTOR);
+        for (const marker of markers) {
+            const markerState = markerStateFromText(getOwnMarkerText(marker, true), true);
+            if (markerState !== null) {
+                return markerState;
+            }
+        }
+
+        return null;
+    }
+
+    function getExplicitStatusNode(label, input) {
+        const statusRef = String(label?.getAttribute?.('aria-describedby') || input?.getAttribute?.('aria-describedby') || '').trim();
+        if (!statusRef) {
+            return null;
+        }
+
+        const ownerDocument = input?.ownerDocument || label?.ownerDocument || document;
+        return ownerDocument.getElementById(statusRef);
+    }
+
+    function findNearbyStatusMarker(label, input) {
+        const explicitStatus = getExplicitStatusNode(label, input);
+        if (explicitStatus) {
+            return explicitStatus;
+        }
+
+        const start = input instanceof Element ? input : (label instanceof Element ? label : null);
+        const ownerDocument = start?.ownerDocument || label?.ownerDocument || document;
+        let current = start?.parentElement || null;
+
+        while (current && current !== ownerDocument.documentElement) {
+            const state = markerStateFromText(getOwnMarkerText(current, false), false);
+            if (state !== null) {
+                return current;
+            }
+
+            const marker = current.querySelector(STATUS_MARKER_SELECTOR);
+            if (marker instanceof Element) {
+                return marker;
+            }
+
+            if (current.matches(QUESTION_ROOT_SELECTOR)) {
+                break;
+            }
+
+            current = current.parentElement;
+        }
+
+        return null;
+    }
+
     function isOptionMarkedCorrect(label, input) {
+        return getOptionMarkedState(label, input) === true;
+    }
+
+    function isOptionMarkedIncorrect(label, input) {
+        return getOptionMarkedState(label, input) === false;
+    }
+
+    function getOptionMarkedState(label, input) {
         const markerText = getMarkerText(label, input);
 
         // Check negative markers first — choicegroup_incorrect on labels, or
         // standalone "incorrect"/"wrong" etc. in class names / attributes.
-        if (NEGATIVE_MARK_RE.test(markerText)) {
+        const directMarkerState = markerStateFromText(markerText, false);
+        if (directMarkerState === false) {
             return false;
         }
 
-        // Check aria-describedby status element.  In edX/OpenEdu all labels
-        // inside a choicegroup share the same aria-describedby pointing to a
-        // single status span (e.g. <span class="status correct">).  When the
-        // status is shared we still check it — the status reflects the
-        // question-level result which is valid for the selected option.
-        const statusRef = String(label?.getAttribute?.('aria-describedby') || input?.getAttribute?.('aria-describedby') || '').trim();
-        if (statusRef) {
-            const ownerDocument = input?.ownerDocument || label?.ownerDocument || document;
-            const statusNode = ownerDocument.getElementById(statusRef);
-            if (statusNode) {
-                const statusClass = String(statusNode.className || '').toLowerCase();
-                const statusNodeText = normalizeText(textOf(statusNode));
-                if (statusClass.includes('incorrect') || NEGATIVE_MARK_RE.test(statusNodeText)) {
-                    return false;
+        // Check explicit aria-describedby first, then nearby status/icon nodes.
+        // In edX/OpenEdu choice labels can share a single status span, while
+        // text inputs may only have a sibling icon/check container.
+        const statusNode = findNearbyStatusMarker(label, input);
+        if (statusNode) {
+            const statusState = markerStateFromNode(statusNode, true);
+            if (statusState === false) {
+                if (input instanceof HTMLInputElement && input.type !== 'text' && !input.checked) {
+                    return null;
                 }
-                if (statusClass.includes('correct') || POSITIVE_MARK_RE.test(statusNodeText)) {
-                    // For shared status: only the selected option counts as correct.
-                    if (input instanceof HTMLInputElement && input.type !== 'text' && !input.checked) {
-                        return false;
-                    }
-                    return true;
+                return false;
+            }
+            if (statusState === true) {
+                // For shared status: only the selected option counts as correct.
+                if (input instanceof HTMLInputElement && input.type !== 'text' && !input.checked) {
+                    return null;
                 }
+                return true;
             }
         }
 
@@ -1591,11 +1737,11 @@
 
         // Final fallback: check positive markers in class names / attributes
         // (e.g. choicegroup_correct on the label itself).
-        if (POSITIVE_MARK_RE.test(markerText)) {
+        if (directMarkerState === true) {
             return true;
         }
 
-        return false;
+        return null;
     }
 
     function buildAnswerKey(answerText, input, fallbackIndex) {
@@ -1771,12 +1917,14 @@
                 return;
             }
             usedKeys.add(dedupeKey);
+            const markedState = getOptionMarkedState(label, input);
 
             options.push({
                 answerKey: buildAnswerKey(answerText, input, idx),
                 answerText,
                 selected: Boolean(input && input.checked),
-                correct: isOptionMarkedCorrect(label, input),
+                correct: markedState === true,
+                incorrect: markedState === false,
                 answerAliases,
                 inputId,
                 inputName,
@@ -1819,12 +1967,14 @@
                 return;
             }
             usedKeys.add(dedupeKey);
+            const markedState = getOptionMarkedState(label, input);
 
             options.push({
                 answerKey: buildAnswerKey(answerText, input, tidx),
                 answerText,
                 selected: answerText.length > 0,
-                correct: isOptionMarkedCorrect(label, input),
+                correct: markedState === true,
+                incorrect: markedState === false,
                 answerAliases,
                 inputId,
                 inputName,
@@ -1858,12 +2008,14 @@
                     return;
                 }
                 const answerAliases = getOptionAnswerAliases(label, input, mediaDescriptors, answerText);
+                const markedState = getOptionMarkedState(label, input);
 
                 options.push({
                     answerKey: buildAnswerKey(answerText, input, idx),
                     answerText,
                     selected: Boolean(input.checked),
-                    correct: isOptionMarkedCorrect(label, input),
+                    correct: markedState === true,
+                    incorrect: markedState === false,
                     answerAliases,
                     inputId,
                     inputName,
@@ -1902,6 +2054,7 @@
         return {
             completedCount: 0,
             verifiedAnswers: [],
+            incorrectAnswers: [],
             fallbackAnswers: []
         };
     }
@@ -1935,13 +2088,57 @@
         return normalized.slice(0, MAX_ANSWERS_PER_QUESTION);
     }
 
+    function mergeAnswerStatsLists(primary, extra) {
+        const map = new Map();
+
+        [primary, extra].forEach((items) => {
+            (Array.isArray(items) ? items : []).forEach((item) => {
+                const answerText = String(item?.answerText || '').trim();
+                if (!answerText) {
+                    return;
+                }
+
+                const answerKey = typeof item?.answerKey === 'string' ? item.answerKey : '';
+                const sig = answerKey + '|' + normalizeText(answerText);
+                const count = Math.max(0, Number(item?.count || 0));
+                const previous = map.get(sig);
+                if (previous) {
+                    previous.count = Math.max(previous.count, count);
+                    return;
+                }
+
+                map.set(sig, {
+                    answerKey,
+                    answerText,
+                    count
+                });
+            });
+        });
+
+        return normalizeAnswerStatsList(Array.from(map.values()));
+    }
+
     function buildLocalFallbackStats(questions) {
         const local = {};
 
         questions.forEach((question) => {
-            const selected = question.options
+            const selectedOptions = question.options
                 .filter((option) => option.selected)
-                .slice(0, MAX_ANSWERS_PER_QUESTION)
+                .slice(0, MAX_ANSWERS_PER_QUESTION);
+            const selected = selectedOptions.map((option) => ({
+                answerKey: option.answerKey,
+                answerText: option.answerText,
+                count: 1
+            }));
+            const verified = selectedOptions
+                .filter((option) => option.correct)
+                .map((option) => ({
+                    answerKey: option.answerKey,
+                    answerText: option.answerText,
+                    count: 1
+                }));
+            const incorrect = selectedOptions
+                .filter((option) => option.incorrect)
                 .map((option) => ({
                     answerKey: option.answerKey,
                     answerText: option.answerText,
@@ -1954,7 +2151,8 @@
 
             local[question.questionKey] = {
                 completedCount: 0,
-                verifiedAnswers: [],
+                verifiedAnswers: verified,
+                incorrectAnswers: incorrect,
                 fallbackAnswers: selected,
                 localOnly: true
             };
@@ -1987,6 +2185,7 @@
         return {
             completedCount: Math.max(0, Number(source?.completedCount || 0)),
             verifiedAnswers: normalizeAnswerStatsList(source?.verifiedAnswers),
+            incorrectAnswers: normalizeAnswerStatsList(source?.incorrectAnswers),
             fallbackAnswers: normalizeAnswerStatsList(source?.fallbackAnswers),
             localOnly: Boolean(localOnly),
             similarMatch: Boolean(source?.similarMatch),
@@ -2000,12 +2199,14 @@
 
     function getQuestionPresentationState(stats) {
         const verifiedAnswers = normalizeAnswerStatsList(stats?.verifiedAnswers);
+        const incorrectAnswers = normalizeAnswerStatsList(stats?.incorrectAnswers);
         const fallbackAnswers = normalizeAnswerStatsList(stats?.fallbackAnswers);
-        const hasAnswers = verifiedAnswers.length > 0 || fallbackAnswers.length > 0;
+        const hasAnswers = verifiedAnswers.length > 0 || incorrectAnswers.length > 0 || fallbackAnswers.length > 0;
         const matchKind = String(stats?.matchedBy || (stats?.similarMatch ? 'similar' : 'exact'));
 
         return {
             verifiedAnswers,
+            incorrectAnswers,
             fallbackAnswers,
             hasAnswers,
             matchKind,
@@ -2030,7 +2231,7 @@
         }
 
         const preserved = buildMergedStatsEntry(previousEntry, Boolean(previousEntry.localOnly));
-        if (preserved.verifiedAnswers.length === 0 && preserved.fallbackAnswers.length === 0) {
+        if (preserved.verifiedAnswers.length === 0 && preserved.incorrectAnswers.length === 0 && preserved.fallbackAnswers.length === 0) {
             return null;
         }
 
@@ -2050,22 +2251,33 @@
                 : null;
 
             const remoteVerified = normalizeAnswerStatsList(remote.verifiedAnswers);
+            const remoteIncorrect = normalizeAnswerStatsList(remote.incorrectAnswers);
             const remoteFallback = normalizeAnswerStatsList(remote.fallbackAnswers);
-            const hasRemoteAnswers = remoteVerified.length > 0 || remoteFallback.length > 0;
+            const localVerified = normalizeAnswerStatsList(local?.verifiedAnswers);
+            const localIncorrect = normalizeAnswerStatsList(local?.incorrectAnswers);
+            const hasRemoteAnswers = remoteVerified.length > 0 || remoteIncorrect.length > 0 || remoteFallback.length > 0;
 
             if (hasRemoteAnswers || !local) {
                 if (hasRemoteAnswers) {
+                    const verifiedAnswers = mergeAnswerStatsLists(remoteVerified, localVerified);
+                    const incorrectAnswers = mergeAnswerStatsLists(remoteIncorrect, localIncorrect);
+                    const hasLocalVerified = localVerified.length > 0;
                     merged[key] = {
                         completedCount: Number(remote.completedCount || 0),
-                        verifiedAnswers: remoteVerified,
+                        verifiedAnswers,
+                        incorrectAnswers,
                         fallbackAnswers: remoteFallback,
                         localOnly: false,
-                        similarMatch: Boolean(remote.similarMatch),
-                        matchedBy: typeof remote.matchedBy === 'string'
+                        similarMatch: hasLocalVerified ? false : Boolean(remote.similarMatch),
+                        matchedBy: hasLocalVerified
+                            ? 'local'
+                            : (typeof remote.matchedBy === 'string'
                             ? remote.matchedBy
-                            : (Boolean(remote.similarMatch) ? 'similar' : 'exact'),
-                        matchedQuestionKey: typeof remote.matchedQuestionKey === 'string' ? remote.matchedQuestionKey : '',
-                        matchedScore: Math.max(0, Number(remote.matchedScore || 0))
+                            : (Boolean(remote.similarMatch) ? 'similar' : 'exact')),
+                        matchedQuestionKey: hasLocalVerified
+                            ? ''
+                            : (typeof remote.matchedQuestionKey === 'string' ? remote.matchedQuestionKey : ''),
+                        matchedScore: hasLocalVerified ? 0 : Math.max(0, Number(remote.matchedScore || 0))
                     };
                     return;
                 }
@@ -2082,7 +2294,8 @@
 
             merged[key] = {
                 completedCount: 0,
-                verifiedAnswers: [],
+                verifiedAnswers: normalizeAnswerStatsList(local.verifiedAnswers),
+                incorrectAnswers: normalizeAnswerStatsList(local.incorrectAnswers),
                 fallbackAnswers: normalizeAnswerStatsList(local.fallbackAnswers),
                 localOnly: true,
                 similarMatch: false,
@@ -2281,7 +2494,9 @@
                         answerKey: option.answerKey,
                         answerText: sanitizeAnswerText(option.answerText),
                         selected: option.selected,
-                        correct: option.correct
+                        correct: option.correct,
+                        incorrect: option.incorrect,
+                        inputType: option.inputType || ''
                     }))
                 };
             })
@@ -2310,6 +2525,7 @@
             questionKeys: questions.map((question) => question.questionKey),
             questions: questions.map((question) => {
                 const answers = question.options
+                    .filter((option) => option.inputType !== 'text')
                     .map((option) => sanitizeAnswerText(option.answerText))
                     .filter(Boolean);
                 return {
@@ -2332,8 +2548,9 @@
         const nonEmptyStatsKeys = statsKeys.filter((key) => {
             const entry = statsByQuestion?.[key];
             const verifiedCount = Array.isArray(entry?.verifiedAnswers) ? entry.verifiedAnswers.length : 0;
+            const incorrectCount = Array.isArray(entry?.incorrectAnswers) ? entry.incorrectAnswers.length : 0;
             const fallbackCount = Array.isArray(entry?.fallbackAnswers) ? entry.fallbackAnswers.length : 0;
-            return verifiedCount > 0 || fallbackCount > 0;
+            return verifiedCount > 0 || incorrectCount > 0 || fallbackCount > 0;
         });
         debugSync('pull_statistics_result', {
             ok: result.ok,
@@ -3634,7 +3851,7 @@
         }, submitDelay);
     }
 
-    function mergeAndSortAnswers(verifiedAnswers, fallbackAnswers) {
+    function mergeAndSortAnswers(verifiedAnswers, incorrectAnswers, fallbackAnswers) {
         const map = new Map();
 
         (verifiedAnswers || []).forEach((ans) => {
@@ -3643,9 +3860,26 @@
                 answerKey: ans.answerKey,
                 answerText: ans.answerText,
                 verifiedCount: ans.count || 0,
+                incorrectCount: 0,
                 fallbackCount: 0,
                 isVerified: true
             });
+        });
+
+        (incorrectAnswers || []).forEach((ans) => {
+            const sig = ans.answerKey + '|' + normalizeText(ans.answerText);
+            if (map.has(sig)) {
+                map.get(sig).incorrectCount = ans.count || 0;
+            } else {
+                map.set(sig, {
+                    answerKey: ans.answerKey,
+                    answerText: ans.answerText,
+                    verifiedCount: 0,
+                    incorrectCount: ans.count || 0,
+                    fallbackCount: 0,
+                    isVerified: false
+                });
+            }
         });
 
         (fallbackAnswers || []).forEach((ans) => {
@@ -3657,6 +3891,7 @@
                     answerKey: ans.answerKey,
                     answerText: ans.answerText,
                     verifiedCount: 0,
+                    incorrectCount: 0,
                     fallbackCount: ans.count || 0,
                     isVerified: false
                 });
@@ -3665,9 +3900,10 @@
 
         const merged = Array.from(map.values());
         merged.sort((a, b) => {
+            if (a.isVerified !== b.isVerified) return a.isVerified ? -1 : 1;
+            if (b.incorrectCount !== a.incorrectCount) return b.incorrectCount - a.incorrectCount;
             if (b.fallbackCount !== a.fallbackCount) return b.fallbackCount - a.fallbackCount;
             if (b.verifiedCount !== a.verifiedCount) return b.verifiedCount - a.verifiedCount;
-            if (a.isVerified !== b.isVerified) return a.isVerified ? -1 : 1;
             return a.answerText.localeCompare(b.answerText);
         });
         return merged;
@@ -3686,6 +3922,13 @@
             });
         });
 
+        if (!hasOpeneduApiToken()) {
+            docsForCleanup.forEach((doc) => {
+                doc.querySelectorAll('.' + INLINE_MENU_CLASS + '[' + INLINE_WAND_ATTR + ']').forEach((node) => node.remove());
+            });
+            return;
+        }
+
         questions.forEach((question) => {
             const block = locateQuestionBlock(question);
             if (!block) {
@@ -3695,6 +3938,7 @@
             const stats = statsByQuestion?.[question.questionKey] || createEmptyStatsEntry();
             const presentation = getQuestionPresentationState(stats);
             const verifiedAnswers = presentation.verifiedAnswers;
+            const incorrectAnswers = presentation.incorrectAnswers;
             const fallbackAnswers = presentation.fallbackAnswers;
             const isMulti = questionAllowsMultipleAnswers(block);
             const hasAnswers = presentation.hasAnswers;
@@ -3844,7 +4088,7 @@
             const list = document.createElement('ul');
             list.className = 'moodush-openedu-inline-stats';
 
-            const allAnswers = mergeAndSortAnswers(verifiedAnswers, fallbackAnswers);
+            const allAnswers = mergeAndSortAnswers(verifiedAnswers, incorrectAnswers, fallbackAnswers);
 
             if (allAnswers.length === 0) {
                 const empty = document.createElement('li');
@@ -3864,7 +4108,12 @@
                     const answerBtn = document.createElement('button');
                     answerBtn.type = 'button';
                     answerBtn.className = 'moodush-openedu-inline-answer';
-                    answerBtn.textContent = answer.isVerified ? (answer.answerText + ' ✓') : answer.answerText;
+                    answerBtn.className += answer.incorrectCount > 0 && !answer.isVerified
+                        ? ' moodush-openedu-inline-answer--incorrect'
+                        : '';
+                    answerBtn.textContent = answer.isVerified
+                        ? (answer.answerText + ' ✓')
+                        : (answer.incorrectCount > 0 ? (answer.answerText + ' ✕') : answer.answerText);
                     answerBtn.title = 'Вставить этот вариант';
                     answerBtn.addEventListener('click', () => {
                         const applied = applyAnswersToQuestion(question, [answer], 'add');
@@ -3890,6 +4139,14 @@
                             ? 'Подтверждено платформой: ' + answer.verifiedCount + ' раз'
                             : 'Ответ подтверждён платформой';
                         countsContainer.appendChild(vCount);
+                    }
+
+                    if (answer.incorrectCount > 0) {
+                        const iCount = document.createElement('span');
+                        iCount.className = 'moodush-openedu-inline-count incorrect';
+                        iCount.textContent = answer.incorrectCount;
+                        iCount.title = 'Платформа отметила как неверный: ' + answer.incorrectCount + ' раз';
+                        countsContainer.appendChild(iCount);
                     }
 
                     const fCount = document.createElement('span');
@@ -3953,6 +4210,9 @@
         if (presentation.verifiedAnswers.length > 0) {
             return 'verified';
         }
+        if (presentation.incorrectAnswers.length > 0) {
+            return 'incorrect';
+        }
         if (stats?.localOnly) {
             return 'local';
         }
@@ -3974,6 +4234,9 @@
         }
         if (kind === 'verified') {
             return completedCount > 0 ? ('правильный · ' + completedCount) : 'правильный';
+        }
+        if (kind === 'incorrect') {
+            return 'есть неверные';
         }
         if (kind === 'local') {
             return 'локально';
@@ -4010,8 +4273,9 @@
         list.className = 'moodush-answer-list';
 
         const verifiedAnswers = normalizeAnswerStatsList(stats.verifiedAnswers);
+        const incorrectAnswers = normalizeAnswerStatsList(stats.incorrectAnswers);
         const selectedAnswers = normalizeAnswerStatsList(stats.fallbackAnswers);
-        const allAnswers = mergeAndSortAnswers(verifiedAnswers, selectedAnswers);
+        const allAnswers = mergeAndSortAnswers(verifiedAnswers, incorrectAnswers, selectedAnswers);
 
         if (allAnswers.length === 0) {
             const emptyItem = document.createElement('li');
@@ -4026,7 +4290,12 @@
 
             const text = document.createElement('span');
             text.className = 'moodush-answer-text';
-            text.textContent = answer.isVerified ? (answer.answerText + ' ✓') : answer.answerText;
+            if (answer.incorrectCount > 0 && !answer.isVerified) {
+                item.classList.add('moodush-answer-item--incorrect');
+            }
+            text.textContent = answer.isVerified
+                ? (answer.answerText + ' ✓')
+                : (answer.incorrectCount > 0 ? (answer.answerText + ' ✕') : answer.answerText);
             item.appendChild(text);
 
             const countsContainer = document.createElement('div');
@@ -4039,6 +4308,13 @@
                     ? answer.verifiedCount + ' подтв.'
                     : 'подтв.';
                 countsContainer.appendChild(vCount);
+            }
+
+            if (answer.incorrectCount > 0) {
+                const iCount = document.createElement('span');
+                iCount.className = 'moodush-answer-count incorrect';
+                iCount.textContent = answer.incorrectCount + ' неверн.';
+                countsContainer.appendChild(iCount);
             }
 
             const fCount = document.createElement('span');
@@ -4110,6 +4386,36 @@
         }
 
         stickBody.innerHTML = '';
+
+        if (!hasOpeneduApiToken()) {
+            if (wandToggle) {
+                wandToggle.textContent = '!';
+                wandToggle.title = OPENEDU_TOKEN_REQUIRED_TEXT;
+                wandToggle.classList.add('moodush-openedu-wand-toggle--token-required');
+            }
+
+            const tokenState = document.createElement('div');
+            tokenState.className = 'moodush-stick-token-required';
+
+            const title = document.createElement('div');
+            title.className = 'moodush-stick-token-title';
+            title.textContent = OPENEDU_TOKEN_REQUIRED_TITLE;
+
+            const text = document.createElement('p');
+            text.className = 'moodush-stick-token-text';
+            text.textContent = OPENEDU_TOKEN_REQUIRED_TEXT;
+
+            tokenState.appendChild(title);
+            tokenState.appendChild(text);
+            stickBody.appendChild(tokenState);
+            return;
+        }
+
+        if (wandToggle) {
+            wandToggle.textContent = '|*';
+            wandToggle.title = 'Открыть MooDuSh OpenEdu';
+            wandToggle.classList.remove('moodush-openedu-wand-toggle--token-required');
+        }
 
         if (!Array.isArray(questions) || questions.length === 0) {
             const emptyState = document.createElement('div');
@@ -4306,7 +4612,9 @@
                     answerKey: option.answerKey,
                     answerText: sanitizeAnswerText(option.answerText),
                     selected: option.selected,
-                    correct: option.correct
+                    correct: option.correct,
+                    incorrect: option.incorrect,
+                    inputType: option.inputType || ''
                 }))
             }));
 
@@ -4412,6 +4720,29 @@
                 await requestTopContext();
             }
 
+            if (!hasOpeneduApiToken()) {
+                debugSync('cycle_missing_openedu_token', {
+                    questionCount: questions.length,
+                    source
+                });
+
+                renderInlineWands({}, []);
+                lastMergedStatsByQuestion = null;
+                lastRenderedQuestions = snapshotQuestionReferences(questions);
+
+                onlineState = { online: false, text: OPENEDU_TOKEN_REQUIRED_TITLE };
+                topFrameOnlineState = onlineState;
+                window.__PARAMEXT_TOPFRAME_ONLINE_STATE = topFrameOnlineState;
+
+                if (isTopFrame) {
+                    setStickOnline(false, onlineState.text);
+                    renderStick({}, questions);
+                } else {
+                    syncIframeStateToTop({}, questions, onlineState);
+                }
+                return;
+            }
+
             const localStatsByQuestion = buildLocalFallbackStats(questions);
             let onlineState = {
                 online: Boolean(topFrameOnlineState?.online),
@@ -4484,7 +4815,9 @@
                             answerKey: String(option.answerKey || ''),
                             selected: Boolean(option.selected),
                             correct: Boolean(option.correct),
-                            answerText: String(option.answerText || '')
+                            incorrect: Boolean(option.incorrect),
+                            answerText: String(option.answerText || ''),
+                            inputType: String(option.inputType || '')
                         }))
                         .sort((a, b) => {
                             const keyCmp = a.answerKey.localeCompare(b.answerKey);
@@ -4905,7 +5238,9 @@
         installStorageSync();
 
         if (isTopFrame) {
-            if (!normalizeApiBaseUrl()) {
+            if (!hasOpeneduApiToken()) {
+                setStickOnline(false, OPENEDU_TOKEN_REQUIRED_TITLE);
+            } else if (!normalizeApiBaseUrl()) {
                 setStickOnline(false, 'Не указан API URL');
             } else {
                 setStickOnline(false, 'Ожидание данных из iframe');

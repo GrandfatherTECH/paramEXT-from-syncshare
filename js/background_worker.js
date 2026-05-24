@@ -1,3 +1,15 @@
+function isMissingReceiverError(error) {
+    const message = String(error && error.message ? error.message : error || '');
+    return message.includes('Could not establish connection')
+        && message.includes('Receiving end does not exist');
+}
+
+self.addEventListener('unhandledrejection', (event) => {
+    if (isMissingReceiverError(event.reason)) {
+        event.preventDefault();
+    }
+});
+
 importScripts('background.js');
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

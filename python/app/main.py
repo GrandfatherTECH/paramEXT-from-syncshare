@@ -128,7 +128,7 @@ async def post_openedu_query(payload: OpenEduSolutionsQueryIn, user_id: int | No
         missing = []
         for q in payload.questions:
             entry = stats.get(q.questionKey)
-            has_answers = entry and (entry.get('verifiedAnswers') or entry.get('fallbackAnswers'))
+            has_answers = entry and (entry.get('verifiedAnswers') or entry.get('incorrectAnswers') or entry.get('fallbackAnswers'))
             if has_answers:
                 meta = question_meta.get(q.questionKey) or {}
                 if meta and not _is_exact_match(
@@ -137,7 +137,7 @@ async def post_openedu_query(payload: OpenEduSolutionsQueryIn, user_id: int | No
                     q.prompt,
                     q.answers or [],
                 ):
-                    stats[q.questionKey] = {'completedCount': 0, 'verifiedAnswers': [], 'fallbackAnswers': []}
+                    stats[q.questionKey] = {'completedCount': 0, 'verifiedAnswers': [], 'incorrectAnswers': [], 'fallbackAnswers': []}
                     entry = stats[q.questionKey]
                     has_answers = False
             if not has_answers and q.prompt:

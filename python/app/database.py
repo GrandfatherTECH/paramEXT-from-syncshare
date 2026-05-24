@@ -252,6 +252,7 @@ class Database:
                     answer_key TEXT NOT NULL,
                     answer_text TEXT NOT NULL,
                     verified_count BIGINT NOT NULL DEFAULT 0,
+                    incorrect_count BIGINT NOT NULL DEFAULT 0,
                     fallback_count BIGINT NOT NULL DEFAULT 0,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     PRIMARY KEY (test_key, question_key, answer_key)
@@ -263,6 +264,7 @@ class Database:
                     question_key TEXT NOT NULL,
                     selected_answer_keys TEXT[] NOT NULL DEFAULT '{}',
                     verified_answer_keys TEXT[] NOT NULL DEFAULT '{}',
+                    incorrect_answer_keys TEXT[] NOT NULL DEFAULT '{}',
                     is_correct BOOLEAN NOT NULL DEFAULT FALSE,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     PRIMARY KEY (test_key, participant_key, question_key)
@@ -300,6 +302,8 @@ class Database:
                 "ALTER TABLE openedu_questions ADD COLUMN IF NOT EXISTS prompt_norm TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE openedu_questions ADD COLUMN IF NOT EXISTS question_fingerprint TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE openedu_answer_stats ADD COLUMN IF NOT EXISTS answer_norm TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE openedu_answer_stats ADD COLUMN IF NOT EXISTS incorrect_count BIGINT NOT NULL DEFAULT 0",
+                "ALTER TABLE openedu_participant_question_state ADD COLUMN IF NOT EXISTS incorrect_answer_keys TEXT[] NOT NULL DEFAULT '{}'",
             ]:
                 await conn.execute(stmt)
 
@@ -575,10 +579,10 @@ class Database:
                     answer_norm = group['answer_norm']
                     rows = await conn.fetch(
                         """
-                        SELECT answer_key, answer_text, verified_count, fallback_count, updated_at
+                        SELECT answer_key, answer_text, verified_count, incorrect_count, fallback_count, updated_at
                         FROM openedu_answer_stats
                         WHERE test_key = $1 AND question_key = $2 AND answer_norm = $3
-                        ORDER BY (verified_count + fallback_count) DESC, updated_at DESC, answer_key ASC
+                        ORDER BY (verified_count + incorrect_count + fallback_count) DESC, updated_at DESC, answer_key ASC
                         """,
                         test_key,
                         question_key,
@@ -601,9 +605,10 @@ class Database:
                             """
                             UPDATE openedu_answer_stats
                             SET verified_count = verified_count + $4,
-                                fallback_count = fallback_count + $5,
-                                answer_text = $6,
-                                answer_norm = $7,
+                                incorrect_count = incorrect_count + $5,
+                                fallback_count = fallback_count + $6,
+                                answer_text = $7,
+                                answer_norm = $8,
                                 updated_at = NOW()
                             WHERE test_key = $1 AND question_key = $2 AND answer_key = $3
                             """,
@@ -611,6 +616,7 @@ class Database:
                             question_key,
                             canonical_key,
                             int(duplicate['verified_count'] or 0),
+                            int(duplicate['incorrect_count'] or 0),
                             int(duplicate['fallback_count'] or 0),
                             answer_text,
                             answer_norm,
@@ -630,9 +636,15 @@ class Database:
                                     WHERE item != ''
                                     ORDER BY item
                                 ),
+                                incorrect_answer_keys = ARRAY(
+                                    SELECT DISTINCT item
+                                    FROM unnest(array_replace(incorrect_answer_keys, $4, $3)) AS item
+                                    WHERE item != ''
+                                    ORDER BY item
+                                ),
                                 updated_at = NOW()
                             WHERE test_key = $1 AND question_key = $2
-                              AND ($4 = ANY(selected_answer_keys) OR $4 = ANY(verified_answer_keys))
+                              AND ($4 = ANY(selected_answer_keys) OR $4 = ANY(verified_answer_keys) OR $4 = ANY(incorrect_answer_keys))
                             """,
                             test_key,
                             question_key,
@@ -676,10 +688,16 @@ class Database:
         async with self.pool.acquire() as conn:
             groups = await conn.fetch(
                 """
-                SELECT test_key, question_fingerprint, array_agg(question_key ORDER BY question_key) AS question_keys
+                SELECT test_key, array_agg(question_key ORDER BY question_key) AS question_keys
                 FROM openedu_questions
                 WHERE question_fingerprint != '' AND question_key LIKE 'q2_%'
                 GROUP BY test_key, question_fingerprint
+                HAVING COUNT(*) > 1
+                UNION
+                SELECT test_key, array_agg(question_key ORDER BY question_key) AS question_keys
+                FROM openedu_questions
+                WHERE prompt_norm != '' AND question_key LIKE 'q2_%'
+                GROUP BY test_key, prompt_norm
                 HAVING COUNT(*) > 1
                 LIMIT 200
                 """
@@ -691,6 +709,16 @@ class Database:
                 for group in groups:
                     test_key = group['test_key']
                     question_keys = [str(key) for key in (group['question_keys'] or []) if str(key)]
+                    existing_rows = await conn.fetch(
+                        """
+                        SELECT question_key
+                        FROM openedu_questions
+                        WHERE test_key = $1 AND question_key = ANY($2::text[])
+                        """,
+                        test_key,
+                        question_keys,
+                    )
+                    question_keys = [str(row['question_key']) for row in existing_rows]
                     if len(question_keys) < 2:
                         continue
 
@@ -705,7 +733,7 @@ class Database:
                     for duplicate_key in duplicate_keys:
                         stat_rows = await conn.fetch(
                             """
-                            SELECT answer_key, answer_text, answer_norm, verified_count, fallback_count
+                            SELECT answer_key, answer_text, answer_norm, verified_count, incorrect_count, fallback_count
                             FROM openedu_answer_stats
                             WHERE test_key = $1 AND question_key = $2
                             """,
@@ -716,12 +744,13 @@ class Database:
                             await conn.execute(
                                 """
                                 INSERT INTO openedu_answer_stats
-                                    (test_key, question_key, answer_key, answer_text, answer_norm, verified_count, fallback_count, updated_at)
-                                VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                                    (test_key, question_key, answer_key, answer_text, answer_norm, verified_count, incorrect_count, fallback_count, updated_at)
+                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
                                 ON CONFLICT (test_key, question_key, answer_key)
                                 DO UPDATE SET answer_text = COALESCE(NULLIF(openedu_answer_stats.answer_text, ''), EXCLUDED.answer_text),
                                               answer_norm = COALESCE(NULLIF(openedu_answer_stats.answer_norm, ''), EXCLUDED.answer_norm),
                                               verified_count = openedu_answer_stats.verified_count + EXCLUDED.verified_count,
+                                              incorrect_count = openedu_answer_stats.incorrect_count + EXCLUDED.incorrect_count,
                                               fallback_count = openedu_answer_stats.fallback_count + EXCLUDED.fallback_count,
                                               updated_at = NOW()
                                 """,
@@ -731,6 +760,7 @@ class Database:
                                 row['answer_text'],
                                 row['answer_norm'] or normalize_answer_text(str(row['answer_text'] or '')),
                                 int(row['verified_count'] or 0),
+                                int(row['incorrect_count'] or 0),
                                 int(row['fallback_count'] or 0),
                             )
 
@@ -741,16 +771,33 @@ class Database:
                         )
                         await conn.execute(
                             """
-                            UPDATE openedu_participant_question_state
-                            SET question_key = $1, updated_at = NOW()
+                            INSERT INTO openedu_participant_question_state
+                                (test_key, participant_key, question_key, selected_answer_keys, verified_answer_keys, incorrect_answer_keys, is_correct, user_id, updated_at)
+                            SELECT test_key, participant_key, $1, selected_answer_keys, verified_answer_keys, incorrect_answer_keys, is_correct, user_id, NOW()
+                            FROM openedu_participant_question_state
                             WHERE test_key = $2 AND question_key = $3
-                              AND NOT EXISTS (
-                                  SELECT 1
-                                  FROM openedu_participant_question_state existing
-                                  WHERE existing.test_key = $2
-                                    AND existing.participant_key = openedu_participant_question_state.participant_key
-                                    AND existing.question_key = $1
-                              )
+                            ON CONFLICT (test_key, participant_key, question_key)
+                            DO UPDATE SET selected_answer_keys = ARRAY(
+                                              SELECT DISTINCT item
+                                              FROM unnest(openedu_participant_question_state.selected_answer_keys || EXCLUDED.selected_answer_keys) AS item
+                                              WHERE item != ''
+                                              ORDER BY item
+                                          ),
+                                          verified_answer_keys = ARRAY(
+                                              SELECT DISTINCT item
+                                              FROM unnest(openedu_participant_question_state.verified_answer_keys || EXCLUDED.verified_answer_keys) AS item
+                                              WHERE item != ''
+                                              ORDER BY item
+                                          ),
+                                          incorrect_answer_keys = ARRAY(
+                                              SELECT DISTINCT item
+                                              FROM unnest(openedu_participant_question_state.incorrect_answer_keys || EXCLUDED.incorrect_answer_keys) AS item
+                                              WHERE item != ''
+                                              ORDER BY item
+                                          ),
+                                          is_correct = openedu_participant_question_state.is_correct OR EXCLUDED.is_correct,
+                                          user_id = COALESCE(EXCLUDED.user_id, openedu_participant_question_state.user_id),
+                                          updated_at = NOW()
                             """,
                             canonical_key,
                             test_key,
@@ -872,7 +919,7 @@ class Database:
             answer_texts = [
                 sanitize_answer_text(str(a.get('answerText') or ''))
                 for a in raw_answers
-                if isinstance(a, dict)
+                if isinstance(a, dict) and str(a.get('inputType') or '') != 'text'
             ]
             question_identity = compute_question_fingerprint(
                 str(q.get('prompt') or '') if isinstance(q, dict) else '',
@@ -888,6 +935,8 @@ class Database:
                                 'answerIdentity': normalize_answer_text(str(a.get('answerText') or '')) or str(a.get('answerKey') or ''),
                                 'selected': bool(a.get('selected')),
                                 'correct': bool(a.get('correct')),
+                                'incorrect': bool(a.get('incorrect')),
+                                'inputType': str(a.get('inputType') or ''),
                             }
                             for a in raw_answers
                             if isinstance(a, dict)
@@ -912,6 +961,7 @@ class Database:
         question_key: str,
         prompt_norm: str,
         question_fingerprint: str,
+        stable_answer_count: int = 0,
     ) -> str:
         if question_fingerprint:
             existing_by_content = await conn.fetchrow(
@@ -929,6 +979,23 @@ class Database:
             )
             if existing_by_content:
                 return str(existing_by_content['question_key'])
+
+        if stable_answer_count == 0 and prompt_norm:
+            existing_by_prompt = await conn.fetchrow(
+                """
+                SELECT question_key
+                FROM openedu_questions
+                WHERE test_key = $1
+                  AND prompt_norm = $2
+                  AND prompt_norm != ''
+                ORDER BY completed_count DESC, updated_at DESC, question_key ASC
+                LIMIT 1
+                """,
+                test_key,
+                prompt_norm,
+            )
+            if existing_by_prompt:
+                return str(existing_by_prompt['question_key'])
 
         existing_by_key = await conn.fetchrow(
             """
@@ -975,12 +1042,12 @@ class Database:
         existing = await conn.fetchrow(
             """
             SELECT answer_key
-            FROM openedu_answer_stats
-            WHERE test_key = $1
-              AND question_key = $2
-              AND answer_norm = $3
-              AND answer_norm != ''
-            ORDER BY (verified_count + fallback_count) DESC, updated_at DESC, answer_key ASC
+                FROM openedu_answer_stats
+                WHERE test_key = $1
+                  AND question_key = $2
+                  AND answer_norm = $3
+                  AND answer_norm != ''
+            ORDER BY (verified_count + incorrect_count + fallback_count) DESC, updated_at DESC, answer_key ASC
             LIMIT 1
             """,
             test_key,
@@ -1073,10 +1140,16 @@ class Database:
                                 'answer_norm': answer_norm,
                                 'selected': bool(answer.get('selected')),
                                 'correct': bool(answer.get('correct')),
+                                'incorrect': bool(answer.get('incorrect')),
+                                'input_type': str(answer.get('inputType') or ''),
                             }
                         )
 
-                    answer_texts = [entry['answer_text'] for entry in raw_answer_entries if entry['answer_text']]
+                    answer_texts = [
+                        entry['answer_text']
+                        for entry in raw_answer_entries
+                        if entry['answer_text'] and entry['input_type'] != 'text'
+                    ]
                     prompt_raw = sanitize_question_prompt(str(question.get('prompt') or ''), answer_texts)
                     prompt_norm = normalize_prompt(prompt_raw)
                     question_fingerprint = compute_question_fingerprint(prompt_raw, answer_texts)
@@ -1086,12 +1159,14 @@ class Database:
                         question_key,
                         prompt_norm,
                         question_fingerprint,
+                        len(answer_texts),
                     )
 
                     answer_text_by_key: dict[str, str] = {}
                     answer_norm_by_key: dict[str, str] = {}
                     selected_answer_keys: set[str] = set()
                     current_verified_answer_keys: set[str] = set()
+                    current_incorrect_answer_keys: set[str] = set()
 
                     for entry in raw_answer_entries:
                         answer_key = await self._resolve_storage_answer_key(
@@ -1115,10 +1190,12 @@ class Database:
                             and entry['correct']
                         ):
                             current_verified_answer_keys.add(answer_key)
+                        if entry['selected'] and entry['incorrect']:
+                            current_incorrect_answer_keys.add(answer_key)
 
                     previous_state = await conn.fetchrow(
                         """
-                        SELECT verified_answer_keys, is_correct
+                        SELECT verified_answer_keys, incorrect_answer_keys, is_correct
                         FROM openedu_participant_question_state
                         WHERE test_key = $1 AND participant_key = $2 AND question_key = $3
                         """,
@@ -1128,11 +1205,13 @@ class Database:
                     )
 
                     prev_verified_keys = set(previous_state['verified_answer_keys'] or []) if previous_state else set()
+                    prev_incorrect_keys = set(previous_state['incorrect_answer_keys'] or []) if previous_state else set()
                     prev_is_correct = bool(previous_state['is_correct']) if previous_state else False
 
                     # Verified answers are permanent: merge with previous,
                     # never remove, never decrement.
                     verified_answer_keys = current_verified_answer_keys | prev_verified_keys
+                    incorrect_answer_keys = current_incorrect_answer_keys | prev_incorrect_keys
 
                     # Once marked correct, stay correct permanently.
                     if prev_is_correct:
@@ -1169,43 +1248,47 @@ class Database:
                     # repeated identical snapshots from the same actor.
                     selected_increment_keys = selected_answer_keys
                     verified_increment_keys = current_verified_answer_keys
+                    incorrect_increment_keys = current_incorrect_answer_keys
 
-                    for answer_key in (selected_increment_keys | verified_increment_keys):
+                    for answer_key in (selected_increment_keys | verified_increment_keys | incorrect_increment_keys):
                         selected_inc = 1 if answer_key in selected_increment_keys else 0
                         verified_inc = 1 if answer_key in verified_increment_keys else 0
-                        if selected_inc == 0 and verified_inc == 0:
+                        incorrect_inc = 1 if answer_key in incorrect_increment_keys else 0
+                        if selected_inc == 0 and verified_inc == 0 and incorrect_inc == 0:
                             continue
                         await conn.execute(
                             """
-                            INSERT INTO openedu_answer_stats (test_key, question_key, answer_key, answer_text, answer_norm, verified_count, fallback_count, updated_at)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                            INSERT INTO openedu_answer_stats (test_key, question_key, answer_key, answer_text, answer_norm, verified_count, incorrect_count, fallback_count, updated_at)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
                             ON CONFLICT (test_key, question_key, answer_key)
                             DO UPDATE SET answer_text = COALESCE(NULLIF(EXCLUDED.answer_text, ''), openedu_answer_stats.answer_text),
                                           answer_norm = COALESCE(NULLIF(EXCLUDED.answer_norm, ''), openedu_answer_stats.answer_norm),
                                           verified_count = openedu_answer_stats.verified_count + EXCLUDED.verified_count,
+                                          incorrect_count = openedu_answer_stats.incorrect_count + EXCLUDED.incorrect_count,
                                           fallback_count = openedu_answer_stats.fallback_count + EXCLUDED.fallback_count,
                                           updated_at = NOW()
                             """,
                             context['testKey'], question_key, answer_key,
                             answer_text_by_key.get(answer_key, ''),
                             answer_norm_by_key.get(answer_key, ''),
-                            verified_inc, selected_inc,
+                            verified_inc, incorrect_inc, selected_inc,
                         )
 
                     await conn.execute(
                         """
                         INSERT INTO openedu_participant_question_state
-                            (test_key, participant_key, question_key, selected_answer_keys, verified_answer_keys, is_correct, user_id, updated_at)
-                        VALUES ($1, $2, $3, $4::text[], $5::text[], $6, $7, NOW())
+                            (test_key, participant_key, question_key, selected_answer_keys, verified_answer_keys, incorrect_answer_keys, is_correct, user_id, updated_at)
+                        VALUES ($1, $2, $3, $4::text[], $5::text[], $6::text[], $7, $8, NOW())
                         ON CONFLICT (test_key, participant_key, question_key)
                         DO UPDATE SET selected_answer_keys = EXCLUDED.selected_answer_keys,
                                       verified_answer_keys = EXCLUDED.verified_answer_keys,
+                                      incorrect_answer_keys = EXCLUDED.incorrect_answer_keys,
                                       is_correct = EXCLUDED.is_correct,
                                       user_id = COALESCE(EXCLUDED.user_id, openedu_participant_question_state.user_id),
                                       updated_at = NOW()
                         """,
                         context['testKey'], participant_key, question_key,
-                        sorted(selected_answer_keys), sorted(verified_answer_keys),
+                        sorted(selected_answer_keys), sorted(verified_answer_keys), sorted(incorrect_answer_keys),
                         question_correct, user_id,
                     )
 
@@ -1223,10 +1306,10 @@ class Database:
             )
             stat_rows = await conn.fetch(
                 """
-                SELECT question_key, answer_key, answer_text, verified_count, fallback_count
+                SELECT question_key, answer_key, answer_text, verified_count, incorrect_count, fallback_count
                 FROM openedu_answer_stats
                 WHERE test_key = $1 AND question_key = ANY($2::text[])
-                ORDER BY question_key, fallback_count DESC, verified_count DESC
+                ORDER BY question_key, verified_count DESC, incorrect_count DESC, fallback_count DESC
                 """,
                 test_key, question_keys,
             )
@@ -1234,16 +1317,19 @@ class Database:
         completed_map = {row['question_key']: int(row['completed_count']) for row in question_rows}
         result: dict[str, Any] = {}
         for qk in question_keys:
-            result[qk] = {'completedCount': completed_map.get(qk, 0), 'verifiedAnswers': [], 'fallbackAnswers': []}
+            result[qk] = {'completedCount': completed_map.get(qk, 0), 'verifiedAnswers': [], 'incorrectAnswers': [], 'fallbackAnswers': []}
 
         for row in stat_rows:
             entry = result.get(row['question_key'])
             if not entry:
                 continue
             v = int(row['verified_count'])
+            i = int(row['incorrect_count'])
             f = int(row['fallback_count'])
             if v > 0:
                 entry['verifiedAnswers'].append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': v})
+            if i > 0:
+                entry['incorrectAnswers'].append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': i})
             if f > 0:
                 entry['fallbackAnswers'].append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': f})
 
@@ -1318,10 +1404,10 @@ class Database:
 
             stat_rows = await conn.fetch(
                 """
-                SELECT question_key, answer_key, answer_text, verified_count, fallback_count
+                SELECT question_key, answer_key, answer_text, verified_count, incorrect_count, fallback_count
                 FROM openedu_answer_stats
                 WHERE test_key = $1 AND question_key = ANY($2::text[])
-                ORDER BY question_key, fallback_count DESC, verified_count DESC
+                ORDER BY question_key, verified_count DESC, incorrect_count DESC, fallback_count DESC
                 """,
                 test_key,
                 matched_keys,
@@ -1335,21 +1421,26 @@ class Database:
         for original_key, (matched_key, completed_count) in matched_map.items():
             rows = stats_by_matched.get(matched_key, [])
             verified = []
+            incorrect = []
             fallback = []
             for row in rows:
                 v = int(row['verified_count'])
+                i = int(row['incorrect_count'])
                 f = int(row['fallback_count'])
                 if v > 0:
                     verified.append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': v})
+                if i > 0:
+                    incorrect.append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': i})
                 if f > 0:
                     fallback.append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': f})
 
-            if not verified and not fallback:
+            if not verified and not incorrect and not fallback:
                 continue
 
             result[original_key] = {
                 'completedCount': completed_count,
                 'verifiedAnswers': verified,
+                'incorrectAnswers': incorrect,
                 'fallbackAnswers': fallback,
                 'similarMatch': False,
                 'matchedBy': 'content',
@@ -1438,10 +1529,10 @@ class Database:
 
             stats_rows = await conn.fetch(
                 """
-                SELECT question_key, answer_key, answer_text, verified_count, fallback_count
+                SELECT question_key, answer_key, answer_text, verified_count, incorrect_count, fallback_count
                 FROM openedu_answer_stats
                 WHERE test_key = $1 AND question_key = ANY($2::text[])
-                ORDER BY question_key, fallback_count DESC, verified_count DESC
+                ORDER BY question_key, verified_count DESC, incorrect_count DESC, fallback_count DESC
                 """,
                 test_key,
                 candidate_keys,
@@ -1495,21 +1586,26 @@ class Database:
         for original_key, (matched_key, completed_count, overlap_ratio) in best_match.items():
             rows = stats_by_matched.get(matched_key, [])
             verified = []
+            incorrect = []
             fallback = []
             for row in rows:
                 v = int(row['verified_count'])
+                i = int(row['incorrect_count'])
                 f = int(row['fallback_count'])
                 if v > 0:
                     verified.append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': v})
+                if i > 0:
+                    incorrect.append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': i})
                 if f > 0:
                     fallback.append({'answerKey': row['answer_key'], 'answerText': row['answer_text'], 'count': f})
 
-            if not verified and not fallback:
+            if not verified and not incorrect and not fallback:
                 continue
 
             result[original_key] = {
                 'completedCount': completed_count,
                 'verifiedAnswers': verified,
+                'incorrectAnswers': incorrect,
                 'fallbackAnswers': fallback,
                 'similarMatch': True,
                 'matchedBy': 'similar',
@@ -1540,6 +1636,7 @@ class Database:
                     (SELECT COUNT(*) FROM openedu_attempts) AS attempts_count,
                     (SELECT COUNT(*) FROM openedu_attempts WHERE created_at > NOW() - INTERVAL '24 hours') AS attempts_24h,
                     (SELECT COALESCE(SUM(verified_count), 0) FROM openedu_answer_stats) AS verified_answers_count,
+                    (SELECT COALESCE(SUM(incorrect_count), 0) FROM openedu_answer_stats) AS incorrect_answers_count,
                     (SELECT COALESCE(SUM(fallback_count), 0) FROM openedu_answer_stats) AS fallback_answers_count
                 """
             )
@@ -1774,6 +1871,7 @@ class Database:
                 SELECT q.test_key, q.question_key, q.prompt, q.completed_count, q.updated_at,
                        COUNT(a.answer_key) AS answers_count,
                        COALESCE(SUM(a.verified_count), 0) AS verified_count,
+                       COALESCE(SUM(a.incorrect_count), 0) AS incorrect_count,
                        COALESCE(SUM(a.fallback_count), 0) AS fallback_count
                 FROM openedu_questions q
                 LEFT JOIN openedu_answer_stats a
@@ -1840,6 +1938,7 @@ class Database:
                         t.title,
                         COUNT(a.answer_key) AS answers_count,
                         COALESCE(SUM(a.verified_count), 0) AS verified_count,
+                        COALESCE(SUM(a.incorrect_count), 0) AS incorrect_count,
                         COALESCE(SUM(a.fallback_count), 0) AS fallback_count
                     FROM openedu_questions q
                     LEFT JOIN openedu_tests t ON t.test_key = q.test_key
@@ -1873,6 +1972,7 @@ class Database:
                         t.title,
                         COUNT(a.answer_key) AS answers_count,
                         COALESCE(SUM(a.verified_count), 0) AS verified_count,
+                        COALESCE(SUM(a.incorrect_count), 0) AS incorrect_count,
                         COALESCE(SUM(a.fallback_count), 0) AS fallback_count
                     FROM openedu_questions q
                     LEFT JOIN openedu_tests t ON t.test_key = q.test_key

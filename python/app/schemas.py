@@ -17,6 +17,8 @@ class OpenEduAnswerIn(BaseModel):
     answerText: str
     selected: bool = False
     correct: bool = False
+    incorrect: bool = False
+    inputType: str = ''
 
 
 class OpenEduQuestionIn(BaseModel):
